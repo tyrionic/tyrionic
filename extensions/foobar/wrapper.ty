@@ -1,0 +1,15 @@
+_foobar_handle = none
+
+
+def _foobar_handle_get():
+    global _foobar_handle
+    if _foobar_handle == none:
+        _foobar_handle = __tyrion_native_host_load("foobar")
+    return _foobar_handle
+
+
+def foobar(text):
+    out = __tyrion_native_host_call(_foobar_handle_get(), "foobar.randomcase", text)
+    if out == none:
+        raise "foobar.randomcase operation unavailable"
+    return out

@@ -2513,6 +2513,259 @@ def apply_stdlib_wrapper_sources(input_path, source, stdlib_wrapper_paths, backe
     return {"source": merged_source, "wrapper_path": join_csv(applied_paths), "applied": "1", "mode": mode}
 
 
+def line_leading_whitespace(line):
+    idx = 0
+    while idx < len(line):
+        ch = line[idx]
+        if ch == " ":
+            idx = idx + 1
+        elif ch == "\t":
+            idx = idx + 1
+        else:
+            return line[:idx]
+    return line
+
+
+def is_colon_loop_header_line(trimmed_line):
+    if ends_with(trimmed_line, ":") != True:
+        return False
+    if starts_with(trimmed_line, "while "):
+        return True
+    if starts_with(trimmed_line, "for "):
+        return True
+    return False
+
+
+def is_brace_loop_header_line(trimmed_line):
+    if ends_with(trimmed_line, "{") != True:
+        return False
+    if starts_with(trimmed_line, "while "):
+        return True
+    if starts_with(trimmed_line, "while("):
+        return True
+    if starts_with(trimmed_line, "for "):
+        return True
+    return False
+
+
+def find_colon_loop_block_end(lines, body_start_idx, header_indent_len):
+    block_end = body_start_idx
+    while block_end < len(lines):
+        scan_line = lines[block_end]
+        scan_trimmed = trim_spaces(scan_line)
+        if scan_trimmed != "":
+            scan_prefix = line_leading_whitespace(scan_line)
+            if len(scan_prefix) <= header_indent_len:
+                return block_end
+        block_end = block_end + 1
+    return block_end
+
+
+def find_brace_loop_block_end(lines, body_start_idx):
+    depth = 1
+    idx = body_start_idx
+    while idx < len(lines):
+        trimmed = trim_spaces(lines[idx])
+        if ends_with(trimmed, "{"):
+            depth = depth + 1
+        if trimmed == "}":
+            depth = depth - 1
+            if depth == 0:
+                return idx
+        idx = idx + 1
+    return len(lines)
+
+
+def rewrite_continue_markers_in_loop_body(body_lines, indent_unit):
+    rewritten = []
+    rewrite_count = 0
+    idx = 0
+    while idx < len(body_lines):
+        line = body_lines[idx]
+        trimmed = trim_spaces(line)
+        prefix = line_leading_whitespace(line)
+        if trimmed == "continue" or trimmed == "next":
+            rewritten = method_append(rewritten, prefix + "raise \"__tyrion_continue__\"")
+            rewrite_count = rewrite_count + 1
+        elif starts_with(trimmed, "continue if "):
+            cond = trim_spaces(trimmed[12:])
+            if cond != "":
+                rewritten = method_append(rewritten, prefix + "if " + cond + ":")
+                rewritten = method_append(rewritten, prefix + indent_unit + "raise \"__tyrion_continue__\"")
+                rewrite_count = rewrite_count + 1
+            else:
+                rewritten = method_append(rewritten, line)
+        elif starts_with(trimmed, "next if "):
+            cond = trim_spaces(trimmed[8:])
+            if cond != "":
+                rewritten = method_append(rewritten, prefix + "if " + cond + ":")
+                rewritten = method_append(rewritten, prefix + indent_unit + "raise \"__tyrion_continue__\"")
+                rewrite_count = rewrite_count + 1
+            else:
+                rewritten = method_append(rewritten, line)
+        else:
+            rewritten = method_append(rewritten, line)
+        idx = idx + 1
+    return {"lines": rewritten, "rewrite_count": rewrite_count}
+
+
+def apply_continue_keyword_rewrite(source):
+    lines = method_split(source, "\n")
+    has_continue_markers = False
+    marker_idx = 0
+    marker_guard = 0
+    marker_limit = len(lines) * 4 + 1024
+    while marker_idx < len(lines):
+        marker_guard = marker_guard + 1
+        if marker_guard > marker_limit:
+            fail("continue rewrite safety trip: marker scan did not converge (marker_idx=" + str(marker_idx) + ", lines=" + str(len(lines)) + ")")
+        marker_trimmed = trim_spaces(lines[marker_idx])
+        if marker_trimmed == "continue" or marker_trimmed == "next":
+            has_continue_markers = True
+            marker_idx = len(lines)
+        elif starts_with(marker_trimmed, "continue if "):
+            has_continue_markers = True
+            marker_idx = len(lines)
+        elif starts_with(marker_trimmed, "next if "):
+            has_continue_markers = True
+            marker_idx = len(lines)
+        else:
+            marker_idx = marker_idx + 1
+    if has_continue_markers != True:
+        return {"source": source, "applied": "0", "continue_rewrites": "0", "wrapped_loops": "0"}
+    total_rewrites = 0
+    wrapped_loops = 0
+    idx = len(lines) - 1
+    outer_guard = 0
+    outer_limit = len(lines) * 4 + 1024
+    while idx >= 0:
+        outer_guard = outer_guard + 1
+        if outer_guard > outer_limit:
+            fail("continue rewrite safety trip: outer loop did not converge (idx=" + str(idx) + ", lines=" + str(len(lines)) + ")")
+        header_line = lines[idx]
+        header_trimmed = trim_spaces(header_line)
+        if is_colon_loop_header_line(header_trimmed):
+            header_prefix = line_leading_whitespace(header_line)
+            header_indent_len = len(header_prefix)
+            block_end = find_colon_loop_block_end(lines, idx + 1, header_indent_len)
+            body_lines = []
+            body_idx = idx + 1
+            while body_idx < block_end:
+                body_lines = method_append(body_lines, lines[body_idx])
+                body_idx = body_idx + 1
+            indent_unit = "  "
+            body_idx = 0
+            while body_idx < len(body_lines):
+                body_line_trimmed = trim_spaces(body_lines[body_idx])
+                if body_line_trimmed != "":
+                    body_prefix = line_leading_whitespace(body_lines[body_idx])
+                    if starts_with(body_prefix, header_prefix):
+                        header_prefix_len = len(header_prefix)
+                        body_prefix_len = len(body_prefix)
+                        candidate = body_prefix[header_prefix_len:body_prefix_len]
+                        if candidate != "":
+                            indent_unit = candidate
+                    body_idx = len(body_lines)
+                else:
+                    body_idx = body_idx + 1
+            rewrite_result = rewrite_continue_markers_in_loop_body(body_lines, indent_unit)
+            if rewrite_result["rewrite_count"] > 0:
+                wrapped_body = []
+                wrapped_body = method_append(wrapped_body, header_prefix + indent_unit + "try:")
+                body_idx = 0
+                while body_idx < len(rewrite_result["lines"]):
+                    body_line = rewrite_result["lines"][body_idx]
+                    if trim_spaces(body_line) == "":
+                        wrapped_body = method_append(wrapped_body, body_line)
+                    else:
+                        wrapped_body = method_append(wrapped_body, indent_unit + body_line)
+                    body_idx = body_idx + 1
+                wrapped_body = method_append(wrapped_body, header_prefix + indent_unit + "except __tyrion_continue__ as __tyrion_continue_exc:")
+                wrapped_body = method_append(wrapped_body, header_prefix + indent_unit + indent_unit + "pass")
+                rebuilt = []
+                rebuild_idx = 0
+                while rebuild_idx <= idx:
+                    rebuilt = method_append(rebuilt, lines[rebuild_idx])
+                    rebuild_idx = rebuild_idx + 1
+                rebuild_idx = 0
+                while rebuild_idx < len(wrapped_body):
+                    rebuilt = method_append(rebuilt, wrapped_body[rebuild_idx])
+                    rebuild_idx = rebuild_idx + 1
+                rebuild_idx = block_end
+                while rebuild_idx < len(lines):
+                    rebuilt = method_append(rebuilt, lines[rebuild_idx])
+                    rebuild_idx = rebuild_idx + 1
+                lines = rebuilt
+                total_rewrites = total_rewrites + rewrite_result["rewrite_count"]
+                wrapped_loops = wrapped_loops + 1
+        elif is_brace_loop_header_line(header_trimmed):
+            block_end = find_brace_loop_block_end(lines, idx + 1)
+            if block_end > idx + 1:
+                body_lines = []
+                body_idx = idx + 1
+                while body_idx < block_end:
+                    body_lines = method_append(body_lines, lines[body_idx])
+                    body_idx = body_idx + 1
+                header_prefix = line_leading_whitespace(header_line)
+                indent_unit = "  "
+                body_idx = 0
+                while body_idx < len(body_lines):
+                    body_line_trimmed = trim_spaces(body_lines[body_idx])
+                    if body_line_trimmed != "":
+                        body_prefix = line_leading_whitespace(body_lines[body_idx])
+                        if starts_with(body_prefix, header_prefix):
+                            header_prefix_len = len(header_prefix)
+                            body_prefix_len = len(body_prefix)
+                            candidate = body_prefix[header_prefix_len:body_prefix_len]
+                            if candidate != "":
+                                indent_unit = candidate
+                        body_idx = len(body_lines)
+                    else:
+                        body_idx = body_idx + 1
+                rewrite_result = rewrite_continue_markers_in_loop_body(body_lines, indent_unit)
+                if rewrite_result["rewrite_count"] > 0:
+                    wrapped_body = []
+                    wrapped_body = method_append(wrapped_body, header_prefix + indent_unit + "try:")
+                    body_idx = 0
+                    while body_idx < len(rewrite_result["lines"]):
+                        body_line = rewrite_result["lines"][body_idx]
+                        if trim_spaces(body_line) == "":
+                            wrapped_body = method_append(wrapped_body, body_line)
+                        else:
+                            wrapped_body = method_append(wrapped_body, indent_unit + body_line)
+                        body_idx = body_idx + 1
+                    wrapped_body = method_append(wrapped_body, header_prefix + indent_unit + "except __tyrion_continue__ as __tyrion_continue_exc:")
+                    wrapped_body = method_append(wrapped_body, header_prefix + indent_unit + indent_unit + "pass")
+                    rebuilt = []
+                    rebuild_idx = 0
+                    while rebuild_idx <= idx:
+                        rebuilt = method_append(rebuilt, lines[rebuild_idx])
+                        rebuild_idx = rebuild_idx + 1
+                    rebuild_idx = 0
+                    while rebuild_idx < len(wrapped_body):
+                        rebuilt = method_append(rebuilt, wrapped_body[rebuild_idx])
+                        rebuild_idx = rebuild_idx + 1
+                    rebuild_idx = block_end
+                    while rebuild_idx < len(lines):
+                        rebuilt = method_append(rebuilt, lines[rebuild_idx])
+                        rebuild_idx = rebuild_idx + 1
+                    lines = rebuilt
+                    total_rewrites = total_rewrites + rewrite_result["rewrite_count"]
+                    wrapped_loops = wrapped_loops + 1
+        idx = idx - 1
+    out = ""
+    out_idx = 0
+    while out_idx < len(lines):
+        if out_idx > 0:
+            out = out + "\n"
+        out = out + lines[out_idx]
+        out_idx = out_idx + 1
+    applied = "0"
+    if total_rewrites > 0:
+        applied = "1"
+    return {"source": out, "applied": applied, "continue_rewrites": str(total_rewrites), "wrapped_loops": str(wrapped_loops)}
+
+
 def append_text_file(path, text):
     with open(path, "a") as f:
         method_write(f, text)
@@ -5909,7 +6162,8 @@ def render_selfhost_native_artifact(input_path, output_path, deterministic, sour
 
 def selfhost_build(input_path, output_path, deterministic, stdlib_wrapper_path):
     source = read_text_file(input_path)
-    stdlib_overlay = apply_stdlib_wrapper_source(input_path, source, stdlib_wrapper_path, "selfhost")
+    continue_overlay = apply_continue_keyword_rewrite(source)
+    stdlib_overlay = apply_stdlib_wrapper_source(input_path, continue_overlay["source"], stdlib_wrapper_path, "selfhost")
     artifact = render_selfhost_artifact(input_path, deterministic, stdlib_overlay["source"], stdlib_overlay["wrapper_path"], stdlib_overlay["applied"])
     write_text_file(output_path, artifact)
 
@@ -6237,14 +6491,15 @@ def selfhost_native_build(input_path, output_path, deterministic, target, link_m
     emit_compile_progress("selfhost_native_build:read_source:start")
     source = read_text_file(frontend_source_request["input_path"])
     emit_compile_progress("selfhost_native_build:read_source:done")
+    continue_overlay = apply_continue_keyword_rewrite(source)
     stdlib_wrapper_paths = resolve_stdlib_wrapper_paths(stdlib_wrapper_path, ext_static_mode, ext_static_dir)
     explicit_stdlib_wrapper = normalize_optional_cli_path(stdlib_wrapper_path)
     if build_target_kind == "stage-compiler":
         if explicit_stdlib_wrapper == "":
             stdlib_wrapper_paths = []
             emit_compile_progress("selfhost_native_build:stdlib_wrapper:auto_skipped_for_stage_compiler")
-    stdlib_overlay = apply_stdlib_wrapper_sources(frontend_source_request["input_path"], source, stdlib_wrapper_paths, "tyrionc")
-    frontend_source_result = {"input_path": frontend_source_request["input_path"], "source": stdlib_overlay["source"], "stdlib_wrapper_path": stdlib_overlay["wrapper_path"], "stdlib_wrapper_applied": stdlib_overlay["applied"], "stdlib_wrapper_mode": stdlib_overlay["mode"]}
+    stdlib_overlay = apply_stdlib_wrapper_sources(frontend_source_request["input_path"], continue_overlay["source"], stdlib_wrapper_paths, "tyrionc")
+    frontend_source_result = {"input_path": frontend_source_request["input_path"], "source": stdlib_overlay["source"], "stdlib_wrapper_path": stdlib_overlay["wrapper_path"], "stdlib_wrapper_applied": stdlib_overlay["applied"], "stdlib_wrapper_mode": stdlib_overlay["mode"], "continue_rewrite_applied": continue_overlay["applied"], "continue_rewrite_count": continue_overlay["continue_rewrites"], "continue_wrapped_loops": continue_overlay["wrapped_loops"]}
     native_codegen_input_path = temp_native_path(output_path, ".native_codegen_input.ty")
     write_text_file(native_codegen_input_path, frontend_source_result["source"])
     emit_compile_progress("selfhost_native_build:feature_scan:start")

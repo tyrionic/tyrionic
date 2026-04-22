@@ -14,7 +14,12 @@ not provided, Tyrion auto-discovers `extensions/*/wrapper.ty` and applies wrappe
 Build example:
 
 ```bash
-./tyrionc --build examples/foobar_static_ext_demo/foobar_static_ext.ty --out /tmp/foobar_demo
+selfhost/bin/tyrionc2 --build examples/foobar_static_ext_demo/foobar_static_ext.ty --out /tmp/foobar_demo --ext-static=required
 ```
 
 (When `--ext-dir` is omitted, the compiler uses `./extensions`.)
+
+Current bundled extensions:
+
+- `foobar`: random mixed-case string transform (`foobar.randomcase`)
+- `rand`: OS-backed random generator utilities (`rand.exec`, `rand`, `rand.float`, `rand.u64`, `rand.int`, `rand.bool`, `rand.bytes.hex`)

@@ -2026,50 +2026,308 @@ def wrapper_extract_operation_literal(arg):
     return parts[1]
 
 
+def wrapper_find_subtext(text, needle):
+    if needle == "":
+        return -1
+    needle_len = len(needle)
+    i = 0
+    limit = len(text) - needle_len
+    while i <= limit:
+        if text[i:i + needle_len] == needle:
+            return i
+        i = i + 1
+    return -1
+
+
+def wrapper_is_ident_char(ch):
+    code = ascii_code(ch)
+    if code >= 48:
+        if code <= 57:
+            return True
+    if code >= 65:
+        if code <= 90:
+            return True
+    if code >= 97:
+        if code <= 122:
+            return True
+    if ch == "_":
+        return True
+    return False
+
+
+def wrapper_is_valid_identifier(name):
+    if name == "":
+        return False
+    first = name[0]
+    first_code = ascii_code(first)
+    if first_code >= 48:
+        if first_code <= 57:
+            return False
+    i = 0
+    scanning = True
+    while scanning:
+        if i >= len(name):
+            scanning = False
+        else:
+            if wrapper_is_ident_char(name[i]) != True:
+                return False
+            i = i + 1
+    return True
+
+
+def wrapper_find_call_open_paren(text, after_name_idx):
+    i = after_name_idx
+    scanning = True
+    while scanning:
+        if i >= len(text):
+            scanning = False
+        elif text[i] == " ":
+            i = i + 1
+        elif text[i] == "\t":
+            i = i + 1
+        else:
+            scanning = False
+    if i < len(text):
+        if text[i] == "(":
+            return i
+    return -1
+
+
+def wrapper_split_top_level_args(arg_text):
+    args = []
+    current = ""
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    in_string = False
+    quote = ""
+    i = 0
+    while i < len(arg_text):
+        ch = arg_text[i]
+        if in_string:
+            current = current + ch
+            escaped = False
+            if i > 0:
+                escaped = arg_text[i - 1] == "\\"
+            if ch == quote:
+                if escaped != True:
+                    in_string = False
+        else:
+            if ch == "\"":
+                in_string = True
+                quote = ch
+                current = current + ch
+            elif ch == "'":
+                in_string = True
+                quote = ch
+                current = current + ch
+            elif ch == "(":
+                paren_depth = paren_depth + 1
+                current = current + ch
+            elif ch == ")":
+                if paren_depth > 0:
+                    paren_depth = paren_depth - 1
+                current = current + ch
+            elif ch == "[":
+                bracket_depth = bracket_depth + 1
+                current = current + ch
+            elif ch == "]":
+                if bracket_depth > 0:
+                    bracket_depth = bracket_depth - 1
+                current = current + ch
+            elif ch == "{":
+                brace_depth = brace_depth + 1
+                current = current + ch
+            elif ch == "}":
+                if brace_depth > 0:
+                    brace_depth = brace_depth - 1
+                current = current + ch
+            elif ch == ",":
+                if paren_depth == 0:
+                    if bracket_depth == 0:
+                        if brace_depth == 0:
+                            args = method_append(args, trim_spaces(current))
+                            current = ""
+                        else:
+                            current = current + ch
+                    else:
+                        current = current + ch
+                else:
+                    current = current + ch
+            else:
+                current = current + ch
+        i = i + 1
+    current_trimmed = trim_spaces(current)
+    if current_trimmed != "":
+        args = method_append(args, current_trimmed)
+    else:
+        if len(args) > 0:
+            args = method_append(args, current_trimmed)
+    return args
+
+
+def wrapper_parse_param_names(param_text):
+    params = []
+    trimmed = trim_spaces(param_text)
+    if trimmed == "":
+        return params
+    parts = method_split(trimmed, ",")
+    i = 0
+    while i < len(parts):
+        name = trim_spaces(parts[i])
+        if name == "":
+            return []
+        params = method_append(params, name)
+        i = i + 1
+    return params
+
+
+def wrapper_substitute_params(expr_text, param_names, call_args):
+    out = ""
+    in_string = False
+    quote = ""
+    i = 0
+    while i < len(expr_text):
+        ch = expr_text[i]
+        if in_string:
+            out = out + ch
+            escaped = False
+            if i > 0:
+                escaped = expr_text[i - 1] == "\\"
+            if ch == quote:
+                if escaped != True:
+                    in_string = False
+            i = i + 1
+        else:
+            if ch == "\"":
+                in_string = True
+                quote = ch
+                out = out + ch
+                i = i + 1
+            elif ch == "'":
+                in_string = True
+                quote = ch
+                out = out + ch
+                i = i + 1
+            elif wrapper_is_ident_char(ch):
+                j = i
+                scanning_ident = True
+                while scanning_ident:
+                    if j >= len(expr_text):
+                        scanning_ident = False
+                    elif wrapper_is_ident_char(expr_text[j]) != True:
+                        scanning_ident = False
+                    else:
+                        j = j + 1
+                token = expr_text[i:j]
+                replaced = False
+                p = 0
+                while p < len(param_names):
+                    if token == param_names[p]:
+                        out = out + "(" + call_args[p] + ")"
+                        replaced = True
+                        p = len(param_names)
+                    else:
+                        p = p + 1
+                if replaced != True:
+                    out = out + token
+                i = j
+            else:
+                out = out + ch
+                i = i + 1
+    return out
+
+
 def wrapper_collect_host_call_specs(wrapper_source):
     ext_name = wrapper_extract_first_host_library(wrapper_source)
     if ext_name == "":
         return {"ok": False, "reason": "wrapper_missing_host_load_literal", "specs": []}
+    specs = []
     lines = method_split(wrapper_source, "\n")
     i = 0
     while i < len(lines):
-        line = trim_spaces(lines[i])
-        if starts_with(line, "def ") and contains_text(line, "(") and contains_text(line, ")"):
-            def_tail = method_split(line, "def ")[1]
+        raw_header = lines[i]
+        header = trim_spaces(raw_header)
+        header_is_def = False
+        if starts_with(header, "def "):
+            if contains_text(header, "("):
+                if contains_text(header, ")"):
+                    header_is_def = True
+        if header_is_def:
+            def_tail = method_split(header, "def ")[1]
             def_name = trim_spaces(method_split(def_tail, "(")[0])
             param_text = method_split(method_split(def_tail, "(")[1], ")")[0]
-            param_name = trim_spaces(param_text)
-            if def_name != "" and param_name != "" and contains_text(param_name, ",") == False:
-                j = i + 1
-                while j < len(lines):
-                    raw = lines[j]
-                    trimmed = trim_spaces(raw)
-                    dedented = False
-                    if trimmed != "":
-                        if starts_with(raw, " ") != True and starts_with(raw, "\t") != True:
-                            dedented = True
-                    if dedented:
-                        j = len(lines)
-                    else:
-                        if contains_text(trimmed, "__tyrion_native_host_call("):
-                            op_marker = ", \""
-                            op_parts = method_split(trimmed, op_marker)
-                            if len(op_parts) >= 2:
-                                op_tail = op_parts[1]
-                                op_name = method_split(op_tail, "\"")[0]
-                                payload_suffix = "\", " + param_name + ")"
-                                if op_name != "":
-                                    if contains_text(trimmed, payload_suffix):
-                                        return {"ok": True, "reason": "", "specs": [{"name": def_name, "op": op_name, "ext_name": ext_name}]}
-                        j = j + 1
+            param_names = wrapper_parse_param_names(param_text)
+            params_ok = False
+            if len(param_names) > 0:
+                params_ok = True
+            elif trim_spaces(param_text) == "":
+                params_ok = True
+            if def_name != "":
+                if params_ok:
+                    j = i + 1
+                    scanning_body = True
+                    while scanning_body:
+                        if j >= len(lines):
+                            scanning_body = False
+                        else:
+                            raw_body = lines[j]
+                            body = trim_spaces(raw_body)
+                            dedented = False
+                            if body != "":
+                                if starts_with(raw_body, " ") != True:
+                                    if starts_with(raw_body, "\t") != True:
+                                        dedented = True
+                            if dedented:
+                                scanning_body = False
+                            else:
+                                expr_text = body
+                                prefix_text = ""
+                                suffix_text = ""
+                                if starts_with(body, "return "):
+                                    body_len = len(body)
+                                    expr_text = trim_spaces(body[7:body_len])
+                                call_name = "__tyrion_native_host_call"
+                                call_idx = wrapper_find_subtext(expr_text, call_name)
+                                if call_idx >= 0:
+                                    open_idx = wrapper_find_call_open_paren(expr_text, call_idx + len(call_name))
+                                    if open_idx >= 0:
+                                        close_idx = wrapper_find_matching_paren(expr_text, open_idx)
+                                        if close_idx >= 0:
+                                            args_blob = expr_text[open_idx + 1:close_idx]
+                                            host_args = wrapper_split_top_level_args(args_blob)
+                                            if len(host_args) >= 3:
+                                                op_name = wrapper_extract_operation_literal(host_args[1])
+                                                payload_expr = trim_spaces(host_args[2])
+                                                if op_name != "":
+                                                    if starts_with(body, "return "):
+                                                        prefix_text = expr_text[0:call_idx]
+                                                        expr_len = len(expr_text)
+                                                        suffix_text = expr_text[close_idx + 1:expr_len]
+                                                    elif len(param_names) == 1:
+                                                        if payload_expr == param_names[0]:
+                                                            prefix_text = ""
+                                                            suffix_text = ""
+                                                        else:
+                                                            op_name = ""
+                                                    else:
+                                                        op_name = ""
+                                                if op_name != "":
+                                                    spec = {"name": def_name, "params": param_names, "op": op_name, "ext_name": ext_name, "payload_expr": payload_expr, "return_prefix": prefix_text, "return_suffix": suffix_text}
+                                                    specs = method_append(specs, spec)
+                                j = j + 1
+                    i = j - 1
         i = i + 1
-    return {"ok": False, "reason": "wrapper_missing_lowerable_function_specs", "specs": []}
+    if len(specs) == 0:
+        return {"ok": False, "reason": "wrapper_missing_lowerable_function_specs", "specs": []}
+    return {"ok": True, "reason": "", "specs": specs}
 
 
 def wrapper_find_matching_paren(text, open_idx):
     i = open_idx
     depth = 0
     in_string = False
+    quote = ""
     while i < len(text):
         ch = text[i]
         if ch == "\"":
@@ -2078,9 +2336,24 @@ def wrapper_find_matching_paren(text, open_idx):
                 escaped = text[i - 1] == "\\"
             if escaped != True:
                 if in_string:
-                    in_string = False
+                    if quote == "\"":
+                        in_string = False
+                        quote = ""
                 else:
                     in_string = True
+                    quote = "\""
+        elif ch == "'":
+            escaped = False
+            if i > 0:
+                escaped = text[i - 1] == "\\"
+            if escaped != True:
+                if in_string:
+                    if quote == "'":
+                        in_string = False
+                        quote = ""
+                else:
+                    in_string = True
+                    quote = "'"
         elif in_string != True:
             if ch == "(":
                 depth = depth + 1
@@ -2092,11 +2365,26 @@ def wrapper_find_matching_paren(text, open_idx):
     return -1
 
 
+def wrapper_is_call_name_boundary(text, idx, name_len):
+    if idx > 0:
+        prev = text[idx - 1]
+        if wrapper_is_ident_char(prev):
+            return False
+    after_idx = idx + name_len
+    if after_idx < len(text):
+        after = text[after_idx]
+        if wrapper_is_ident_char(after):
+            return False
+    return True
+
+
 def wrapper_is_definition_site(source, idx):
     line_start = idx
     keep_scanning = True
-    while line_start > 0 and keep_scanning:
-        if source[line_start - 1] == "\n":
+    while keep_scanning:
+        if line_start <= 0:
+            keep_scanning = False
+        elif source[line_start - 1] == "\n":
             keep_scanning = False
         else:
             line_start = line_start - 1
@@ -2112,27 +2400,74 @@ def wrapper_rewrite_direct_calls(source, specs):
     spec_idx = 0
     while spec_idx < len(specs):
         spec = specs[spec_idx]
-        marker = spec["name"] + "("
-        parts = method_split(rewritten, marker)
-        if len(parts) > 1:
-            rebuilt = parts[0]
-            part_idx = 1
-            while part_idx < len(parts):
-                segment = parts[part_idx]
-                close_parts = method_split(segment, ")")
-                if len(close_parts) < 2:
-                    fail("stdlib wrapper direct rewrite malformed callsite for " + spec["name"])
-                arg_expr = close_parts[0]
-                suffix = ""
-                suffix_idx = len(arg_expr) + 1
-                while suffix_idx < len(segment):
-                    suffix = suffix + segment[suffix_idx]
-                    suffix_idx = suffix_idx + 1
-                replacement = "__tyrion_native_host_call(__tyrion_native_host_load(\"" + spec["ext_name"] + "\"), \"" + spec["op"] + "\", " + arg_expr + ")"
-                rebuilt = rebuilt + replacement + suffix
-                replacement_count = replacement_count + 1
-                part_idx = part_idx + 1
-            rewritten = rebuilt
+        out = ""
+        i = 0
+        in_string = False
+        quote = ""
+        in_comment = False
+        name = spec["name"]
+        name_len = len(name)
+        while i < len(rewritten):
+            matched = False
+            ch = rewritten[i]
+            if in_comment:
+                out = out + ch
+                if ch == "\n":
+                    in_comment = False
+                i = i + 1
+                matched = True
+            elif in_string:
+                out = out + ch
+                escaped = False
+                if i > 0:
+                    escaped = rewritten[i - 1] == "\\"
+                if ch == quote:
+                    if escaped != True:
+                        in_string = False
+                        quote = ""
+                i = i + 1
+                matched = True
+            else:
+                if ch == "#":
+                    in_comment = True
+                    out = out + ch
+                    i = i + 1
+                    matched = True
+                elif ch == "\"":
+                    in_string = True
+                    quote = "\""
+                    out = out + ch
+                    i = i + 1
+                    matched = True
+                elif ch == "'":
+                    in_string = True
+                    quote = "'"
+                    out = out + ch
+                    i = i + 1
+                    matched = True
+            if matched != True:
+                if i + name_len <= len(rewritten):
+                    if rewritten[i:i + name_len] == name:
+                        if wrapper_is_call_name_boundary(rewritten, i, name_len):
+                            if wrapper_is_definition_site(rewritten, i) != True:
+                                open_idx = wrapper_find_call_open_paren(rewritten, i + name_len)
+                                if open_idx >= 0:
+                                    close_idx = wrapper_find_matching_paren(rewritten, open_idx)
+                                    if close_idx >= 0:
+                                        arg_blob = rewritten[open_idx + 1:close_idx]
+                                        call_args = wrapper_split_top_level_args(arg_blob)
+                                        if len(call_args) == len(spec["params"]):
+                                            payload_expr = wrapper_substitute_params(spec["payload_expr"], spec["params"], call_args)
+                                            host_call = "__tyrion_native_host_call(__tyrion_native_host_load(\"" + spec["ext_name"] + "\"), \"" + spec["op"] + "\", " + payload_expr + ")"
+                                            replacement = spec["return_prefix"] + host_call + spec["return_suffix"]
+                                            out = out + replacement
+                                            replacement_count = replacement_count + 1
+                                            i = close_idx + 1
+                                            matched = True
+            if matched != True:
+                out = out + rewritten[i]
+                i = i + 1
+        rewritten = out
         spec_idx = spec_idx + 1
     return {"source": rewritten, "replacement_count": replacement_count}
 
@@ -5903,6 +6238,11 @@ def selfhost_native_build(input_path, output_path, deterministic, target, link_m
     source = read_text_file(frontend_source_request["input_path"])
     emit_compile_progress("selfhost_native_build:read_source:done")
     stdlib_wrapper_paths = resolve_stdlib_wrapper_paths(stdlib_wrapper_path, ext_static_mode, ext_static_dir)
+    explicit_stdlib_wrapper = normalize_optional_cli_path(stdlib_wrapper_path)
+    if build_target_kind == "stage-compiler":
+        if explicit_stdlib_wrapper == "":
+            stdlib_wrapper_paths = []
+            emit_compile_progress("selfhost_native_build:stdlib_wrapper:auto_skipped_for_stage_compiler")
     stdlib_overlay = apply_stdlib_wrapper_sources(frontend_source_request["input_path"], source, stdlib_wrapper_paths, "tyrionc")
     frontend_source_result = {"input_path": frontend_source_request["input_path"], "source": stdlib_overlay["source"], "stdlib_wrapper_path": stdlib_overlay["wrapper_path"], "stdlib_wrapper_applied": stdlib_overlay["applied"], "stdlib_wrapper_mode": stdlib_overlay["mode"]}
     native_codegen_input_path = temp_native_path(output_path, ".native_codegen_input.ty")

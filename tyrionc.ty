@@ -2531,7 +2531,11 @@ def is_colon_loop_header_line(trimmed_line):
         return False
     if starts_with(trimmed_line, "while "):
         return True
+    if starts_with(trimmed_line, "while("):
+        return True
     if starts_with(trimmed_line, "for "):
+        return True
+    if starts_with(trimmed_line, "for("):
         return True
     return False
 
@@ -2584,7 +2588,10 @@ def rewrite_continue_markers_in_loop_body(body_lines, indent_unit):
         line = body_lines[idx]
         trimmed = trim_spaces(line)
         prefix = line_leading_whitespace(line)
-        if trimmed == "continue" or trimmed == "next":
+        if trimmed == "continue":
+            rewritten = method_append(rewritten, prefix + "raise \"__tyrion_continue__\"")
+            rewrite_count = rewrite_count + 1
+        elif trimmed == "next":
             rewritten = method_append(rewritten, prefix + "raise \"__tyrion_continue__\"")
             rewrite_count = rewrite_count + 1
         elif starts_with(trimmed, "continue if "):
@@ -2620,7 +2627,10 @@ def apply_continue_keyword_rewrite(source):
         if marker_guard > marker_limit:
             fail("continue rewrite safety trip: marker scan did not converge (marker_idx=" + str(marker_idx) + ", lines=" + str(len(lines)) + ")")
         marker_trimmed = trim_spaces(lines[marker_idx])
-        if marker_trimmed == "continue" or marker_trimmed == "next":
+        if marker_trimmed == "continue":
+            has_continue_markers = True
+            marker_idx = len(lines)
+        elif marker_trimmed == "next":
             has_continue_markers = True
             marker_idx = len(lines)
         elif starts_with(marker_trimmed, "continue if "):

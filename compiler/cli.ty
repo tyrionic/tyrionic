@@ -1,0 +1,195 @@
+# Tyrionic Compiler
+# (c) 2026 Dennis Vink — https://drvink.com/
+# Project: https://github.com/tyrionic/
+# SPDX-License-Identifier: MIT
+#
+# compiler / cli: responsibility-owned canonical compiler module.
+
+def usage():
+    print("Usage:")
+    print("  tyrionc --help")
+    print("  tyrionc --version")
+    print("  tyrionc --scan <input.ty>")
+    print("  tyrionc --tokens <input.ty>")
+    print("  tyrionc --token-summary <input.ty>")
+    print("  tyrionc --parse-summary <input.ty>")
+    print("  tyrionc --build <input.ty> --out <output>")
+    print("  tyrionc --build <input.ty> --out <output> --ext-static=<off|auto|required>")
+    print("  tyrionc --build <input.ty> --out <output> --ext-dir <path>")
+
+def version():
+    print("tyrionic compiler v0")
+
+def command_scan(path):
+    inv = source_inventory(path)
+    print("source=" + path)
+    print("line_count=" + str(inv["line_count"]))
+    print("nonempty_line_count=" + str(inv["nonempty_line_count"]))
+
+def command_token_summary(path):
+    source = read_text_file(path)
+    tokens = lex(source)
+    inv = token_inventory(tokens)
+    print("source=" + path)
+    print("token_count=" + str(inv["token_count"]))
+    print("identifier_count=" + str(inv["identifier_count"]))
+    print("keyword_count=" + str(inv["keyword_count"]))
+    print("string_count=" + str(inv["string_count"]))
+    print("int_count=" + str(inv["int_count"]))
+    print("float_count=" + str(inv["float_count"]))
+    print("indent_count=" + str(inv["indent_count"]))
+    print("dedent_count=" + str(inv["dedent_count"]))
+    print("unknown_count=" + str(inv["unknown_count"]))
+
+def command_tokens(path):
+    source = read_text_file(path)
+    tokens = lex(source)
+    idx = 0
+    while idx < len(tokens):
+        print(str(idx) + ":" + token_kind_at(tokens, idx) + ":" + token_text_at(tokens, idx))
+        idx = idx + 1
+
+def command_parse_summary(path):
+    source = read_text_file(path)
+    tokens = lex(source)
+    program = parse_program(tokens)
+    inv = ast_inventory(program)
+    print("source=" + path)
+    print("node_count=" + str(inv["node_count"]))
+    print("function_count=" + str(inv["function_count"]))
+    print("assign_count=" + str(inv["assign_count"]))
+    print("return_count=" + str(inv["return_count"]))
+    print("if_count=" + str(inv["if_count"]))
+    print("while_count=" + str(inv["while_count"]))
+    print("for_count=" + str(inv["for_count"]))
+    print("expr_count=" + str(inv["expr_count"]))
+    print("call_count=" + str(inv["call_count"]))
+    print("print_call_count=" + str(inv["print_call_count"]))
+    print("binary_count=" + str(inv["binary_count"]))
+    print("unary_count=" + str(inv["unary_count"]))
+
+def cli_route_info_add_test(info, expr):
+    if expr["kind"] == "binary" and expr["op"] == "and":
+        info = cli_route_info_add_test(info, expr["left"])
+        return cli_route_info_add_test(info, expr["right"])
+    if expr["kind"] == "binary" and expr["op"] == "==":
+        if expr_is_args_len_call(expr["left"]) and expr["right"]["kind"] == "int":
+            info["argc"] = expr["right"]["value"]
+            return info
+        if expr_is_args_len_call(expr["right"]) and expr["left"]["kind"] == "int":
+            info["argc"] = expr["left"]["value"]
+            return info
+        if expr_is_args_index(expr["left"]) and expr["right"]["kind"] == "string":
+            info["tests"] = method_append(info["tests"], {"index": expr["left"]["index"]["value"], "value": expr["right"]["value"]})
+            return info
+        if expr_is_args_index(expr["right"]) and expr["left"]["kind"] == "string":
+            info["tests"] = method_append(info["tests"], {"index": expr["right"]["index"]["value"], "value": expr["left"]["value"]})
+            return info
+    fail("unsupported cli_main route condition for native lowering")
+
+def cli_route_info(condition):
+    return cli_route_info_add_test({"argc": -1, "tests": []}, condition)
+
+def cli_test_value(info, index):
+    idx = 0
+    while idx < len(info["tests"]):
+        if info["tests"][idx]["index"] == index:
+            return info["tests"][idx]["value"]
+        idx = idx + 1
+    return ""
+
+def cli_spec_record_route(spec, info, action):
+    first = cli_test_value(info, 0)
+    third = cli_test_value(info, 2)
+    if action == "usage":
+        if info["argc"] == 0 or info["argc"] == -1:
+            spec["usage_default"] = True
+        elif info["argc"] == 1 and first != "":
+            spec["help_flag"] = first
+    elif action == "version":
+        if info["argc"] == 1 and first != "":
+            spec["version_flag"] = first
+    elif action == "build_native":
+        if info["argc"] == 4 and first != "" and third != "":
+            spec["build_flag"] = first
+            spec["out_flag"] = third
+    elif action != "":
+        if first != "":
+            spec["unsupported_flags"] = method_append(spec["unsupported_flags"], first)
+    return spec
+
+def cli_route_records_to_spec(records):
+    spec = {"usage_default": False, "help_flag": "", "version_flag": "", "build_flag": "", "out_flag": "", "unsupported_flags": []}
+    idx = 0
+    while idx < len(records):
+        spec = cli_spec_record_route(spec, records[idx]["info"], records[idx]["action"])
+        idx = idx + 1
+    if spec["help_flag"] == "":
+        spec["help_flag"] = "--help"
+    if spec["version_flag"] == "":
+        spec["version_flag"] = "--version"
+    if spec["build_flag"] == "":
+        spec["build_flag"] = "--build"
+    if spec["out_flag"] == "":
+        spec["out_flag"] = "--out"
+    return spec
+
+def build_compiler_cli_native(raw_source, input_path, output_path):
+    target = host_target()
+    artifact_path = output_path + ".tyn"
+    tokens = lex(raw_source)
+    program = parse_program(tokens)
+    usage_text = compiler_program_function_print_text(program, "usage")
+    version_text = compiler_program_function_print_text(program, "version")
+    cli_spec = collect_cli_spec(program)
+    asm_path = make_asm_path(output_path)
+    asm_writer = asm_writer_open(asm_path)
+    asm_writer = emit_compiler_cli_asm_into(asm_writer, target, usage_text, version_text, cli_spec)
+    asm_writer_close(asm_writer)
+    # The sidecar is diagnostic metadata; compiler capability comes from the
+    # streamed executable and strict artifact proofs, not a reconstructed IR.
+    write_text_file(artifact_path, "tyrion-bootstrap-native v0\nnative-build-target-kind=compiler-cli\nnative-exec-mode=compiler-cli-direct\n")
+    if not link_asm(asm_path, output_path):
+        fail("native-link rejected code=link-failed;path=" + asm_path + ";output=" + output_path)
+    return True
+
+def build_runtime_native_program_if_needed(raw_source, input_path, output_path):
+    return build_runtime_native_direct_program_if_supported(raw_source, input_path, output_path)
+
+def build_native(input_path, output_path):
+    raw_source = read_module_graph(input_path)
+    program = parse_program(lex(raw_source))
+    if program_has_function(program, "cli_main"):
+        if build_compiler_cli_native(raw_source, input_path, output_path):
+            return
+        fail("unsupported compiler invocation or compiler-source build failed")
+    if build_runtime_native_program_if_needed(raw_source, input_path, output_path):
+        return
+    fail("direct native lowering does not support this program")
+
+def cli_main(args):
+    if len(args) == 0:
+        usage()
+        return
+    if len(args) == 1 and args[0] == "--help":
+        usage()
+        return
+    if len(args) == 1 and args[0] == "--version":
+        version()
+        return
+    if len(args) == 2 and args[0] == "--scan":
+        command_scan(args[1])
+        return
+    if len(args) == 2 and args[0] == "--token-summary":
+        command_token_summary(args[1])
+        return
+    if len(args) == 2 and args[0] == "--tokens":
+        command_tokens(args[1])
+        return
+    if len(args) == 2 and args[0] == "--parse-summary":
+        command_parse_summary(args[1])
+        return
+    if len(args) == 4 and args[0] == "--build" and args[2] == "--out":
+        build_native(args[1], args[3])
+        return
+    fail("unknown or invalid compiler arguments")

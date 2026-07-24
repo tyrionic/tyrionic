@@ -1,0 +1,29 @@
+# Tyrionic Compiler
+# (c) 2026 Dennis Vink — https://drvink.com/
+# Project: https://github.com/tyrionic/
+# SPDX-License-Identifier: MIT
+#
+import compiler.core
+import compiler.module_graph
+import compiler.generated_abi
+import compiler.target_contract
+import compiler.primitives
+import compiler.lexer
+import compiler.frontend
+import compiler.application_semantics
+import compiler.writer
+import compiler.lowering
+import compiler.evaluation
+import compiler.runtime_plan
+import compiler.runtime_abi
+import compiler.static_extensions
+import compiler.backend.exec_functions
+import compiler.backend.native_runtime
+import compiler.backend.components
+import compiler.targets.darwin_aarch64
+import compiler.targets.linux
+import compiler.targets.linux_x86_64
+import compiler.cli
+
+
+cli_main(argv())

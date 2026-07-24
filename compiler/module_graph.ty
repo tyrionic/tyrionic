@@ -1,0 +1,108 @@
+# Tyrionic Compiler
+# (c) 2026 Dennis Vink — https://drvink.com/
+# Project: https://github.com/tyrionic/
+# SPDX-License-Identifier: MIT
+#
+# Compiler module graph loading and source provenance.
+
+
+def module_graph_import_name(line):
+    text = trim_spaces(line)
+    parts = text.split(" ")
+    if len(parts) >= 2 and (parts[0] == "import" or parts[0] == "from"):
+        return parts[1]
+    return ""
+
+
+def module_graph_metadata_line(line):
+    text = trim_spaces(line)
+    parts = text.split(" ")
+    return len(parts) >= 1 and (parts[0] == "module" or parts[0] == "export")
+
+
+def module_graph_dir(path):
+    idx = len(path)
+    while idx > 0:
+        idx = idx - 1
+        if path[idx] == "/":
+            if idx == 0:
+                return "/"
+            return path[0:idx]
+    return "."
+
+
+def module_graph_resolve(current_path, module_name):
+    out = module_graph_dir(current_path) + "/"
+    idx = 0
+    while idx < len(module_name):
+        if module_name[idx] == ".":
+            out = out + "/"
+        else:
+            out = out + module_name[idx]
+        idx = idx + 1
+    return out + ".ty"
+
+
+def module_graph_top_level_symbol(line):
+    if line == "" or line[0] == " " or line[0] == "\t":
+        return ""
+    idx = 0
+    if len(line) > 4 and line[0:4] == "def ":
+        idx = 4
+    elif len(line) > 6 and line[0:6] == "class ":
+        idx = 6
+    else:
+        return ""
+    out = ""
+    while idx < len(line) and is_ident_continue(line[idx]):
+        out = out + line[idx]
+        idx = idx + 1
+    return out
+
+
+def module_graph_visit(path, root_path, loaded, active, symbols, depth):
+    if depth > 64:
+        fail("module graph depth exceeded: " + path)
+    if list_contains_string(active, path):
+        fail("module cycle: " + path)
+    if list_contains_string(loaded, path):
+        return {"source": "", "loaded": loaded, "symbols": symbols}
+    next_active = []
+    for active_path in active:
+        next_active.append(active_path)
+    next_active.append(path)
+    source = read_text_file(path)
+    lines = source.split("\n")
+    out = "# module-source: " + path + "\n"
+    idx = 0
+    while idx < len(lines):
+        module_name = module_graph_import_name(lines[idx])
+        if module_name != "":
+            module_path = module_graph_resolve(root_path, module_name)
+            child = module_graph_visit(module_path, root_path, loaded, next_active, symbols, depth + 1)
+            out = out + child["source"]
+            loaded = child["loaded"]
+            symbols = child["symbols"]
+        idx = idx + 1
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        module_name = module_graph_import_name(line)
+        if module_name == "" and not module_graph_metadata_line(line):
+            symbol = module_graph_top_level_symbol(line)
+            if symbol != "":
+                if list_contains_string(symbols, symbol):
+                    fail("duplicate module definition: " + symbol)
+                symbols.append(symbol)
+            out = out + line + "\n"
+        idx = idx + 1
+    loaded.append(path)
+    return {"source": out, "loaded": loaded, "symbols": symbols}
+
+
+def read_module_graph(path):
+    loaded = []
+    active = []
+    symbols = []
+    result = module_graph_visit(path, path, loaded, active, symbols, 0)
+    return result["source"] + "# module-graph-hash: generated-source-order\n"

@@ -1,0 +1,640 @@
+# Tyrionic Compiler
+# (c) 2026 Dennis Vink — https://drvink.com/
+# Project: https://github.com/tyrionic/
+# SPDX-License-Identifier: MIT
+#
+# Linux/x86-64 semantic instruction renderer.
+#
+# The canonical compiler emitters describe their implementation with the
+# bounded AArch64-shaped semantic instruction vocabulary. This module lowers
+# that vocabulary directly while the assembly writer is active. It is compiler
+# source, not a post-processing or host-tool route.
+
+def x86_semantic_prefix(text, prefix):
+    if len(text) < len(prefix):
+        return False
+    return text[0:len(prefix)] == prefix
+
+
+def x86_semantic_suffix(text, suffix):
+    if len(text) < len(suffix):
+        return False
+    return text[len(text) - len(suffix):len(text)] == suffix
+
+
+def x86_semantic_operands(text):
+    out = []
+    start = 0
+    depth = 0
+    idx = 0
+    while idx < len(text):
+        ch = text[idx]
+        if ch == "[":
+            depth = depth + 1
+        if ch == "]":
+            depth = depth - 1
+        if ch == "," and depth == 0:
+            out = method_append(out, trim_spaces(text[start:idx]))
+            start = idx + 1
+        idx = idx + 1
+    out = method_append(out, trim_spaces(text[start:len(text)]))
+    return out
+
+
+def x86_semantic_register_width(reg):
+    if reg == "sp" or reg == "xzr":
+        return 64
+    if reg == "wzr":
+        return 32
+    if len(reg) > 1 and reg[0] == "x":
+        return 64
+    if len(reg) > 1 and reg[0] == "w":
+        return 32
+    if len(reg) > 1 and reg[0] == "d":
+        return 64
+    fail("invalid semantic register: " + reg)
+
+
+def x86_semantic_register_index(reg):
+    if reg == "sp":
+        return 31
+    if reg == "xzr" or reg == "wzr":
+        return -1
+    return int(reg[1:len(reg)])
+
+
+def x86_semantic_slot(reg):
+    if reg == "sp":
+        return "__tyrion_vsp(%rip)"
+    index = x86_semantic_register_index(reg)
+    if index < 0:
+        fail("zero register has no storage slot")
+    if reg[0] == "d":
+        return "__tyrion_vfregs+" + str(index * 8) + "(%rip)"
+    return "__tyrion_vregs+" + str(index * 8) + "(%rip)"
+
+
+def x86_semantic_float_load(reg, physical):
+    return "movsd " + x86_semantic_slot(reg) + ", " + physical + "\n"
+
+
+def x86_semantic_float_store(reg, physical):
+    return "movsd " + physical + ", " + x86_semantic_slot(reg) + "\n"
+
+
+def x86_semantic_physical32(reg):
+    if reg == "%rax":
+        return "%eax"
+    if reg == "%rcx":
+        return "%ecx"
+    if reg == "%rdx":
+        return "%edx"
+    if reg == "%rsi":
+        return "%esi"
+    if reg == "%rdi":
+        return "%edi"
+    if reg == "%r8" or reg == "%r9" or reg == "%r10" or reg == "%r11":
+        return reg + "d"
+    fail("unsupported x86 physical register: " + reg)
+
+
+def x86_semantic_load(reg, physical):
+    if reg == "xzr" or reg == "wzr":
+        return "xor " + physical + ", " + physical + "\n"
+    if x86_semantic_register_width(reg) == 32:
+        return "mov " + x86_semantic_slot(reg) + ", " + x86_semantic_physical32(physical) + "\n"
+    return "mov " + x86_semantic_slot(reg) + ", " + physical + "\n"
+
+
+def x86_semantic_store(reg, physical):
+    if reg == "xzr" or reg == "wzr":
+        return ""
+    if x86_semantic_register_width(reg) == 32:
+        p32 = x86_semantic_physical32(physical)
+        return "mov " + p32 + ", " + p32 + "\nmov " + physical + ", " + x86_semantic_slot(reg) + "\n"
+    return "mov " + physical + ", " + x86_semantic_slot(reg) + "\n"
+
+
+def x86_semantic_immediate(text):
+    if len(text) < 2 or text[0] != "#":
+        fail("invalid semantic immediate: " + text)
+    body = text[1:len(text)]
+    if len(body) > 2 and body[0:2] == "0x":
+        value = 0
+        idx = 2
+        while idx < len(body):
+            ch = body[idx]
+            digit = -1
+            if ch >= "0" and ch <= "9":
+                digit = int(ch)
+            if ch == "a" or ch == "A":
+                digit = 10
+            if ch == "b" or ch == "B":
+                digit = 11
+            if ch == "c" or ch == "C":
+                digit = 12
+            if ch == "d" or ch == "D":
+                digit = 13
+            if ch == "e" or ch == "E":
+                digit = 14
+            if ch == "f" or ch == "F":
+                digit = 15
+            if digit < 0:
+                fail("invalid hexadecimal immediate: " + text)
+            value = value * 16 + digit
+            idx = idx + 1
+        return value
+    return int(body)
+
+
+def x86_semantic_load_value(value, physical):
+    if len(value) > 0 and value[0] == "#":
+        return "movabs $" + str(x86_semantic_immediate(value)) + ", " + physical + "\n"
+    return x86_semantic_load(value, physical)
+
+
+def x86_semantic_condition(condition):
+    if condition == "eq":
+        return "e"
+    if condition == "ne":
+        return "ne"
+    if condition == "lt":
+        return "l"
+    if condition == "le":
+        return "le"
+    if condition == "gt":
+        return "g"
+    if condition == "ge":
+        return "ge"
+    if condition == "lo":
+        return "b"
+    if condition == "hs" or condition == "cs":
+        return "ae"
+    if condition == "hi":
+        return "a"
+    if condition == "ls":
+        return "be"
+    if condition == "vs":
+        return "o"
+    if condition == "vc":
+        return "no"
+    if condition == "mi":
+        return "s"
+    if condition == "pl":
+        return "ns"
+    fail("unsupported semantic condition: " + condition)
+
+
+def x86_semantic_indent(text):
+    out = ""
+    lines = text.split("\n")
+    idx = 0
+    while idx < len(lines):
+        if lines[idx] != "":
+            out = out + "    " + lines[idx] + "\n"
+        idx = idx + 1
+    return out
+
+
+def x86_semantic_binary(dst, left, right, operation):
+    out = x86_semantic_load_value(left, "%r10")
+    left_physical = "%r10"
+    right_physical = "%r11"
+    if x86_semantic_register_width(dst) == 32:
+        left_physical = "%r10d"
+        right_physical = "%r11d"
+    if len(right) > 0 and right[0] == "#":
+        out = out + operation + " $" + str(x86_semantic_immediate(right)) + ", " + left_physical + "\n"
+    else:
+        out = out + x86_semantic_load(right, "%r11")
+        out = out + operation + " " + right_physical + ", " + left_physical + "\n"
+    return out + x86_semantic_store(dst, "%r10")
+
+
+def x86_semantic_compare(left, right):
+    out = x86_semantic_load_value(left, "%r10")
+    left_physical = "%r10"
+    right_physical = "%r11"
+    if x86_semantic_register_width(left) == 32:
+        left_physical = "%r10d"
+        right_physical = "%r11d"
+    if len(right) > 0 and right[0] == "#":
+        return out + "cmp $" + str(x86_semantic_immediate(right)) + ", " + left_physical + "\n"
+    out = out + x86_semantic_load(right, "%r11")
+    return out + "cmp " + right_physical + ", " + left_physical + "\n"
+
+
+def x86_semantic_external_args():
+    out = x86_semantic_load("x0", "%rdi")
+    out = out + x86_semantic_load("x1", "%rsi")
+    out = out + x86_semantic_load("x2", "%rdx")
+    out = out + x86_semantic_load("x3", "%rcx")
+    out = out + x86_semantic_load("x4", "%r8")
+    out = out + x86_semantic_load("x5", "%r9")
+    return out
+
+
+def x86_semantic_external_name(symbol):
+    name = symbol
+    if len(name) > 4 and name[len(name) - 4:len(name)] == "@PLT":
+        name = name[0:len(name) - 4]
+    if len(name) > 0 and name[0] == "_":
+        name = name[1:len(name)]
+    if name == "malloc_size":
+        return "malloc_usable_size"
+    return name
+
+
+def x86_semantic_external_call(symbol):
+    name = x86_semantic_external_name(symbol)
+    out = x86_semantic_external_args()
+    out = out + "mov %rsp, %r12\nand $-16, %rsp\n"
+    out = out + "call " + name + "@PLT\nmov %r12, %rsp\n"
+    out = out + "movsd %xmm0, __tyrion_vfregs(%rip)\n"
+    return out + x86_semantic_store("x0", "%rax")
+
+
+def x86_semantic_virtual_return():
+    out = "mov __tyrion_vregs+240(%rip), %r10\n"
+    out = out + "test %r10, %r10\nje 1f\n"
+    out = out + "jmp *%r10\n"
+    return out + "1:\n" + x86_semantic_load("x0", "%rax") + "ret\n"
+
+
+def x86_semantic_external_tail_call(symbol):
+    # AArch64 `b _external` is a tail call. SysV still needs a physical CALL
+    # for the external function's RET, followed by the virtual x30 return used
+    # by translated internal functions.
+    return x86_semantic_external_call(symbol) + x86_semantic_virtual_return()
+
+
+def x86_semantic_internal_symbol(symbol):
+    if symbol[0] == "L" or symbol[0] == ".":
+        return True
+    # GNU numeric local-label references (for example `2f`) are internal
+    # continuations. Treating them as external emits a physical SysV CALL and
+    # leaves its return address behind when the virtual x30 path resumes.
+    if len(symbol) >= 2:
+        suffix = symbol[len(symbol) - 1:len(symbol)]
+        first = symbol[0:1]
+        if (suffix == "f" or suffix == "b") and first >= "0" and first <= "9":
+            return True
+    return x86_semantic_prefix(symbol, "__tyrion_")
+
+
+def x86_semantic_memory(memory):
+    writeback = False
+    text = memory
+    if len(text) > 0 and text[len(text) - 1] == "!":
+        writeback = True
+        text = text[0:len(text) - 1]
+    if len(text) < 3 or text[0] != "[" or text[len(text) - 1] != "]":
+        fail("invalid semantic memory operand: " + memory)
+    parts = x86_semantic_operands(text[1:len(text) - 1])
+    base = parts[0]
+    index = ""
+    offset = 0
+    shift = 0
+    if len(parts) > 1:
+        if len(parts[1]) > 0 and parts[1][0] == "#":
+            offset = x86_semantic_immediate(parts[1])
+        else:
+            index = parts[1]
+    if len(parts) > 2:
+        shift_parts = parts[2].split(" ")
+        if len(shift_parts) != 2 or shift_parts[0] != "lsl":
+            fail("invalid semantic memory index shift: " + memory)
+        shift = x86_semantic_immediate(shift_parts[1])
+    return {"base": base, "index": index, "offset": offset, "shift": shift, "writeback": writeback}
+
+
+def x86_semantic_memory_address(memory):
+    spec = x86_semantic_memory(memory)
+    out = x86_semantic_load(spec["base"], "%r11")
+    if spec["index"] != "":
+        out = out + x86_semantic_load(spec["index"], "%rax")
+        if spec["shift"] != 0:
+            out = out + "shl $" + str(spec["shift"]) + ", %rax\n"
+        out = out + "add %rax, %r11\n"
+    offset = spec["offset"]
+    if spec["writeback"]:
+        if offset != 0:
+            out = out + "add $" + str(offset) + ", %r11\n"
+        out = out + x86_semantic_store(spec["base"], "%r11")
+        offset = 0
+    return {"code": out, "base": spec["base"], "offset": offset}
+
+
+def x86_semantic_load_memory(dst, memory, byte):
+    address = x86_semantic_memory_address(memory)
+    out = address["code"]
+    where = str(address["offset"]) + "(%r11)"
+    if byte:
+        out = out + "movzbl " + where + ", %r10d\n"
+    elif x86_semantic_register_width(dst) == 32:
+        out = out + "mov " + where + ", %r10d\n"
+    else:
+        out = out + "mov " + where + ", %r10\n"
+    return out + x86_semantic_store(dst, "%r10")
+
+
+def x86_semantic_store_memory(src, memory, byte):
+    address = x86_semantic_memory_address(memory)
+    out = address["code"] + x86_semantic_load(src, "%r10")
+    where = str(address["offset"]) + "(%r11)"
+    if byte:
+        return out + "mov %r10b, " + where + "\n"
+    if x86_semantic_register_width(src) == 32:
+        return out + "mov %r10d, " + where + "\n"
+    return out + "mov %r10, " + where + "\n"
+
+
+def x86_semantic_load_memory_half(dst, memory):
+    address = x86_semantic_memory_address(memory)
+    out = address["code"]
+    where = str(address["offset"]) + "(%r11)"
+    out = out + "movzwl " + where + ", %r10d\n"
+    return out + x86_semantic_store(dst, "%r10")
+
+
+def x86_semantic_store_memory_half(src, memory):
+    address = x86_semantic_memory_address(memory)
+    out = address["code"] + x86_semantic_load(src, "%r10")
+    where = str(address["offset"]) + "(%r11)"
+    return out + "mov %r10w, " + where + "\n"
+
+
+def x86_semantic_post_increment(memory, amount):
+    spec = x86_semantic_memory(memory)
+    out = x86_semantic_load(spec["base"], "%r10")
+    out = out + "add $" + str(amount) + ", %r10\n"
+    return out + x86_semantic_store(spec["base"], "%r10")
+
+
+def x86_semantic_pair(op, args):
+    first = args[0]
+    second = args[1]
+    memory = args[2]
+    address = x86_semantic_memory_address(memory)
+    out = address["code"]
+    offset = address["offset"]
+    if op == "stp":
+        out = out + x86_semantic_load(first, "%r10") + "mov %r10, " + str(offset) + "(%r11)\n"
+        out = out + x86_semantic_load(second, "%r10") + "mov %r10, " + str(offset + 8) + "(%r11)\n"
+    else:
+        out = out + "mov " + str(offset) + "(%r11), %r10\n" + x86_semantic_store(first, "%r10")
+        out = out + "mov " + str(offset + 8) + "(%r11), %r10\n" + x86_semantic_store(second, "%r10")
+    if len(args) > 3:
+        out = out + x86_semantic_post_increment(memory, x86_semantic_immediate(args[3]))
+    return out
+
+
+def x86_semantic_lower_line(text):
+    if len(text) == 0:
+        return "\n"
+    if text[0] == "." or text[0] == "#":
+        return text + "\n"
+    if text[0] == ";":
+        return "#" + text[1:len(text)] + "\n"
+    if len(text) > 1 and text[0:2] == "/*":
+        return "# " + text + "\n"
+    split = text.split(" ")
+    op = split[0]
+    arg_text = ""
+    if len(text) > len(op):
+        arg_text = trim_spaces(text[len(op):len(text)])
+    args = x86_semantic_operands(arg_text)
+    arg_idx = 0
+    while arg_idx < len(args):
+        if args[arg_idx] == "#":
+            fail("incomplete semantic immediate in line: " + text)
+        arg_idx = arg_idx + 1
+    out = ""
+    if op == "mov":
+        out = x86_semantic_load_value(args[1], "%r10") + x86_semantic_store(args[0], "%r10")
+    elif op == "fmov":
+        if args[0][0] == "d":
+            out = x86_semantic_load(args[1], "%r10") + "movq %r10, %xmm0\n"
+            out = out + x86_semantic_float_store(args[0], "%xmm0")
+        else:
+            out = x86_semantic_float_load(args[1], "%xmm0") + "movq %xmm0, %r10\n"
+            out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "scvtf":
+        out = x86_semantic_load(args[1], "%r10") + "cvtsi2sd %r10, %xmm0\n"
+        out = out + x86_semantic_float_store(args[0], "%xmm0")
+    elif op == "fcvtzs":
+        out = x86_semantic_float_load(args[1], "%xmm0") + "cvttsd2si %xmm0, %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "fadd" or op == "fsub" or op == "fmul" or op == "fdiv":
+        float_op = "addsd"
+        if op == "fsub":
+            float_op = "subsd"
+        if op == "fmul":
+            float_op = "mulsd"
+        if op == "fdiv":
+            float_op = "divsd"
+        out = x86_semantic_float_load(args[1], "%xmm0")
+        out = out + x86_semantic_float_load(args[2], "%xmm1")
+        out = out + float_op + " %xmm1, %xmm0\n"
+        out = out + x86_semantic_float_store(args[0], "%xmm0")
+    elif op == "fabs":
+        out = x86_semantic_float_load(args[1], "%xmm0") + "movq %xmm0, %r10\n"
+        out = out + "btr $63, %r10\nmovq %r10, %xmm0\n"
+        out = out + x86_semantic_float_store(args[0], "%xmm0")
+    elif op == "fcmp":
+        out = x86_semantic_float_load(args[0], "%xmm0")
+        if args[1] == "#0.0":
+            out = out + "pxor %xmm1, %xmm1\n"
+        else:
+            out = out + x86_semantic_float_load(args[1], "%xmm1")
+        # AArch64's following signed conditions read N/V, while ucomisd only
+        # defines x86 CF/ZF/PF. Materialize a signed -1/0/+1 comparison result
+        # and compare it with zero so b.lt/b.ge/b.eq use coherent flags.
+        out = out + "ucomisd %xmm1, %xmm0\n"
+        out = out + "seta %r10b\nsetb %r11b\n"
+        out = out + "movzbl %r10b, %r10d\nmovzbl %r11b, %r11d\n"
+        out = out + "sub %r11, %r10\ncmp $0, %r10\n"
+    elif op == "movz":
+        out = x86_semantic_load_value(args[1], "%r10") + x86_semantic_store(args[0], "%r10")
+    elif op == "movk":
+        shift_parts = args[2].split(" ")
+        shift = x86_semantic_immediate(shift_parts[1])
+        value = x86_semantic_immediate(args[1])
+        if shift != 16:
+            fail("x86 semantic movk shift is not lowered: " + text)
+        out = x86_semantic_load(args[0], "%r10")
+        out = out + "movabs $18446744069414649855, %r11\nand %r11, %r10\n"
+        out = out + "or $" + str(value * 65536) + ", %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "add":
+        if x86_semantic_prefix(args[2], ":lo12:") or x86_semantic_suffix(args[2], "@PAGEOFF"):
+            out = x86_semantic_load(args[1], "%r10") + x86_semantic_store(args[0], "%r10")
+        elif len(args) > 3:
+            shift_parts = args[3].split(" ")
+            out = x86_semantic_load(args[2], "%r11")
+            out = out + "shl $" + str(x86_semantic_immediate(shift_parts[1])) + ", %r11\n"
+            out = out + x86_semantic_load(args[1], "%r10") + "add %r11, %r10\n"
+            out = out + x86_semantic_store(args[0], "%r10")
+        else:
+            out = x86_semantic_binary(args[0], args[1], args[2], "add")
+    elif op == "sub" or op == "subs":
+        out = x86_semantic_binary(args[0], args[1], args[2], "sub")
+    elif op == "ldr" or op == "ldrb" or op == "ldrh":
+        if len(args[1]) > 0 and args[1][0] == "=":
+            out = x86_semantic_load_value("#" + args[1][1:len(args[1])], "%r10") + x86_semantic_store(args[0], "%r10")
+        elif args[0][0] == "d":
+            address = x86_semantic_memory_address(args[1])
+            out = address["code"] + "movsd " + str(address["offset"]) + "(%r11), %xmm0\n"
+            out = out + x86_semantic_float_store(args[0], "%xmm0")
+        else:
+            if op == "ldrh":
+                out = x86_semantic_load_memory_half(args[0], args[1])
+            else:
+                out = x86_semantic_load_memory(args[0], args[1], op == "ldrb")
+            if len(args) > 2:
+                out = out + x86_semantic_post_increment(args[1], x86_semantic_immediate(args[2]))
+    elif op == "str" or op == "strb" or op == "strh":
+        if args[0][0] == "d":
+            address = x86_semantic_memory_address(args[1])
+            out = address["code"] + x86_semantic_float_load(args[0], "%xmm0")
+            out = out + "movsd %xmm0, " + str(address["offset"]) + "(%r11)\n"
+        elif op == "strh":
+            out = x86_semantic_store_memory_half(args[0], args[1])
+        else:
+            out = x86_semantic_store_memory(args[0], args[1], op == "strb")
+        if len(args) > 2:
+            out = out + x86_semantic_post_increment(args[1], x86_semantic_immediate(args[2]))
+    elif op == "stp" or op == "ldp":
+        out = x86_semantic_pair(op, args)
+    elif op == "lsl" or op == "lsr":
+        out = x86_semantic_load(args[1], "%r10")
+        shift_op = "shl"
+        if op == "lsr":
+            shift_op = "shr"
+        if len(args[2]) > 0 and args[2][0] == "#":
+            out = out + shift_op + " $" + str(x86_semantic_immediate(args[2])) + ", %r10\n"
+        else:
+            out = out + x86_semantic_load(args[2], "%rcx") + shift_op + " %cl, %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "and" or op == "orr" or op == "eor":
+        binary_op = "and"
+        if op == "orr":
+            binary_op = "or"
+        if op == "eor":
+            binary_op = "xor"
+        out = x86_semantic_binary(args[0], args[1], args[2], binary_op)
+    elif op == "bic":
+        out = x86_semantic_load(args[2], "%r11") + "not %r11\n"
+        out = out + x86_semantic_load(args[1], "%r10") + "and %r11, %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "neg":
+        out = x86_semantic_load(args[1], "%r10") + "neg %r10\n" + x86_semantic_store(args[0], "%r10")
+    elif op == "mul":
+        out = x86_semantic_binary(args[0], args[1], args[2], "imul")
+    elif op == "madd" or op == "msub":
+        out = x86_semantic_load(args[1], "%r10") + x86_semantic_load(args[2], "%r11") + "imul %r11, %r10\n"
+        if op == "msub":
+            out = out + "neg %r10\n"
+        out = out + x86_semantic_load(args[3], "%r11") + "add %r11, %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "sdiv" or op == "udiv" or op == "umulh":
+        out = x86_semantic_load(args[1], "%rax")
+        if op == "sdiv":
+            out = out + "cqo\n"
+        else:
+            out = out + "xor %rdx, %rdx\n"
+        out = out + x86_semantic_load(args[2], "%r11")
+        if op == "sdiv":
+            out = out + "idiv %r11\nmov %rax, %r10\n"
+        elif op == "udiv":
+            out = out + "div %r11\nmov %rax, %r10\n"
+        else:
+            out = out + "mul %r11\nmov %rdx, %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "uxtw" or op == "sxtw":
+        out = x86_semantic_load(args[1], "%r10")
+        if op == "uxtw":
+            out = out + "mov %r10d, %r10d\n"
+        else:
+            out = out + "movslq %r10d, %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "cmp":
+        out = x86_semantic_compare(args[0], args[1])
+    elif op == "cmn" or op == "tst":
+        out = x86_semantic_load(args[0], "%r10") + x86_semantic_load_value(args[1], "%r11")
+        left_physical = "%r10"
+        right_physical = "%r11"
+        if x86_semantic_register_width(args[0]) == 32:
+            left_physical = "%r10d"
+            right_physical = "%r11d"
+        if op == "cmn":
+            # Keep x86 CF as the inverse of AArch64 C. That is naturally true
+            # for cmp/sub; flag-producing addition needs an explicit carry
+            # complement so the shared unsigned condition mapping stays valid.
+            out = out + "add " + right_physical + ", " + left_physical + "\ncmc\n"
+        else:
+            out = out + "test " + right_physical + ", " + left_physical + "\n"
+    elif op == "adds":
+        out = x86_semantic_binary(args[0], args[1], args[2], "add") + "cmc\n"
+    elif op == "cset":
+        out = "set" + x86_semantic_condition(args[1]) + " %r10b\nmovzbl %r10b, %r10d\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "cinc":
+        out = x86_semantic_load(args[1], "%r10") + "lea 1(%r10), %r11\n"
+        out = out + "cmov" + x86_semantic_condition(args[2]) + " %r11, %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "csel":
+        out = x86_semantic_load(args[2], "%r10") + x86_semantic_load(args[1], "%r11")
+        out = out + "cmov" + x86_semantic_condition(args[3]) + " %r11, %r10\n"
+        out = out + x86_semantic_store(args[0], "%r10")
+    elif op == "b":
+        if x86_semantic_internal_symbol(args[0]):
+            out = "jmp " + args[0] + "\n"
+        else:
+            out = x86_semantic_external_tail_call(args[0])
+    elif x86_semantic_prefix(op, "b."):
+        out = "j" + x86_semantic_condition(op[2:len(op)]) + " " + args[0] + "\n"
+    elif op == "cbz" or op == "cbnz":
+        # AArch64 CBZ/CBNZ do not modify NZCV. Save and restore x86 flags on
+        # both paths; the local conditional jump stays short while the final
+        # unconditional jump can reach any generated label.
+        out = x86_semantic_load(args[0], "%r10")
+        out = out + "pushfq\ntest %r10, %r10\n"
+        if op == "cbz":
+            out = out + "jne 999999f\npopfq\njmp " + args[1] + "\n999999:\npopfq\n"
+        else:
+            out = out + "je 999999f\npopfq\njmp " + args[1] + "\n999999:\npopfq\n"
+    elif op == "tbnz" or op == "tbz":
+        out = x86_semantic_load(args[0], "%r10")
+        out = out + "pushfq\nbt $" + str(x86_semantic_immediate(args[1])) + ", %r10\n"
+        if op == "tbnz":
+            out = out + "jnc 999999f\n"
+        else:
+            out = out + "jc 999999f\n"
+        out = out + "popfq\njmp " + args[2] + "\n999999:\npopfq\n"
+    elif op == "adrp":
+        label = args[1]
+        if x86_semantic_suffix(label, "@PAGE"):
+            label = label[0:len(label) - 5]
+        out = "lea " + label + "(%rip), %r10\n" + x86_semantic_store(args[0], "%r10")
+    elif op == "bl":
+        if x86_semantic_internal_symbol(args[0]):
+            out = "lea 1f(%rip), %r10\n"
+            out = out + "mov %r10, __tyrion_vregs+240(%rip)\n"
+            out = out + "jmp " + args[0] + "\n1:\n"
+        else:
+            out = x86_semantic_external_call(args[0])
+    elif op == "blr":
+        out = x86_semantic_load(args[0], "%r11")
+        out = out + "lea 1f(%rip), %r10\n"
+        out = out + "mov %r10, __tyrion_vregs+240(%rip)\n"
+        out = out + "jmp *%r11\n1:\n"
+    elif op == "br":
+        out = x86_semantic_load(args[0], "%r11") + "jmp *%r11\n"
+    elif op == "ret":
+        out = x86_semantic_virtual_return()
+    elif op == "svc":
+        out = "# semantic svc is unreachable in the compiler CLI\n"
+    else:
+        fail("x86 semantic instruction is not lowered: " + text)
+    return x86_semantic_indent(out)

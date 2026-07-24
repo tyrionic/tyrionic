@@ -1,3 +1,6 @@
+# CI builds the example executables directly; this Tyrionic suite verifies
+# their presence and asserts their runtime output before release publication.
+
 def require(condition, message):
     if not condition:
         raise message

@@ -29,6 +29,8 @@ jobs:
             artifact: tyrionic-mac-arm64
           - runner: ubuntu-24.04
             artifact: tyrionic-linux-amd64
+          - runner: ubuntu-24.04-arm
+            artifact: tyrionic-linux-arm64
 
     steps:
       - name: Checkout Tyrionic
@@ -80,10 +82,30 @@ jobs:
           done < <(find examples -type f -name '*.ty' | sort)
 
           platform="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          mkdir -p build/examples
+
+          while IFS= read -r source; do
+            if [[ "$source" == "examples/terminal_chess.ty" && "$platform" != "darwin" ]]; then
+              echo "Skipping unsupported Linux terminal example: $source"
+              continue
+            fi
+
+            name="$(basename "$source" .ty)"
+            output="$GITHUB_WORKSPACE/build/examples/$name"
+            args=(--build "$GITHUB_WORKSPACE/$source" --out "$output")
+
+            if [[ "$source" == examples/extensions/* ]]; then
+              args+=(--ext-static=required --ext-dir "$GITHUB_WORKSPACE/examples/extensions")
+            fi
+
+            echo "Building $source -> $output"
+            "$GITHUB_WORKSPACE/dist/${{ matrix.artifact }}" "${args[@]}"
+            test -x "$output"
+          done < <(find examples -type f -name '*.ty' | sort)
+
           ./bootstrap/build/tyrionc \
             --exec-call "$GITHUB_WORKSPACE/compiler/tests/examples.ty" \
             main \
-            "$GITHUB_WORKSPACE/dist/${{ matrix.artifact }}" \
             "$platform"
 
       - name: Upload Built Binary

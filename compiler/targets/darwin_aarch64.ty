@@ -3776,10 +3776,14 @@ def emit_darwin_aarch64_string_copy_runtime(out, target):
         out = asm_line(out, "b.hs L_string_copy_loop")
         out = asm_line(out, "b L_string_copy_packed")
     else:
+        # Darwin uses both low image/stack addresses and high nano-malloc
+        # addresses. Values below the high packed-text window are pointers;
+        # treating every address at or above 2^38 as packed text turns common
+        # 0x6000... heap pointers into empty strings when their low byte is 0.
         out = asm_line(out, "mov x11, #1")
         out = asm_line(out, "lsl x11, x11, #38")
         out = asm_line(out, "cmp x10, x11")
-        out = asm_line(out, "b.hs L_string_copy_packed")
+        out = asm_line(out, "b.lo L_string_copy_loop")
         out = asm_line(out, "mov x11, #4")
         out = asm_line(out, "lsl x11, x11, #44")
         out = asm_line(out, "cmp x10, x11")

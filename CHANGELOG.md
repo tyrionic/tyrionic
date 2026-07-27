@@ -4,6 +4,19 @@ All notable changes to `tyrionic` are documented in this file.
 
 This project follows semantic versioning.
 
+## 0.1.2
+
+Changed:
+
+- Store Linux x86-64 static source tokens in a versioned, pointer-free image
+  with deterministic text deduplication while preserving the canonical runtime
+  token ABI and ownership behavior.
+
+Fixed:
+
+- Materialize bounded NUL-terminated copies before passing length-addressed
+  token text to `strtod`.
+
 ## 0.1.1
 
 Added:

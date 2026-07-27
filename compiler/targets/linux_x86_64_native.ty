@@ -118,12 +118,235 @@ def x86_native_dispatch_runtime_label(table_id):
     return "__tyrion_native_ir_dispatch_" + str(table_id)
 
 
-def x86_native_static_token_label(table_id):
-    return "__tyrion_native_ir_static_tokens_" + str(table_id)
+def x86_native_static_token_image_label(table_id):
+    return ".L_tyrion_native_ir_static_token_image_" + str(table_id)
 
 
-def x86_native_static_token_text_label(table_id, token_id):
-    return "__tyrion_native_ir_static_token_text_" + str(table_id) + "_" + str(token_id)
+def x86_native_static_token_pool_label(table_id):
+    return ".L_tyrion_native_ir_static_token_pool_" + str(table_id)
+
+
+def x86_native_static_token_image_size_label(table_id):
+    return ".L_tyrion_native_ir_static_token_image_size_" + str(table_id)
+
+
+def x86_native_static_token_image_magic():
+    # ASCII "TYRSTIMG", interpreted as a little-endian-independent integer
+    # contract by the emitter and generated runtime.
+    return 6077979689963048263
+
+
+def x86_native_static_token_image_version():
+    return 1
+
+
+def x86_native_static_token_image_header_size():
+    return 48
+
+
+def x86_native_static_token_image_record_size():
+    return 40
+
+
+def x86_native_static_token_image_magic_offset():
+    return 0
+
+
+def x86_native_static_token_image_version_offset():
+    return 8
+
+
+def x86_native_static_token_image_token_count_offset():
+    return 16
+
+
+def x86_native_static_token_image_pool_size_offset():
+    return 24
+
+
+def x86_native_static_token_image_record_size_offset():
+    return 32
+
+
+def x86_native_static_token_image_reserved_offset():
+    return 40
+
+
+def x86_native_static_token_record_kind_offset():
+    return 0
+
+
+def x86_native_static_token_record_text_offset_offset():
+    return 8
+
+
+def x86_native_static_token_record_text_length_offset():
+    return 16
+
+
+def x86_native_static_token_record_line_offset():
+    return 24
+
+
+def x86_native_static_token_record_column_offset():
+    return 32
+
+
+def x86_native_static_image_checked_add(left, right, detail):
+    if left < 0 or right < 0 or left > 9223372036854775807 - right:
+        fail("x86 static token image rejected code=size-overflow;detail=" + detail)
+    return left + right
+
+
+def x86_native_static_image_checked_multiply(left, right, detail):
+    if left < 0 or right < 0:
+        fail("x86 static token image rejected code=size-negative;detail=" + detail)
+    if left != 0 and right > 9223372036854775807 / left:
+        fail("x86 static token image rejected code=size-overflow;detail=" + detail)
+    return left * right
+
+
+def x86_native_token_pool_entry(pool, text):
+    length = len(text)
+    if length < 0:
+        fail("x86 static token image rejected code=negative-text-length")
+    offset = pool["size"]
+    pool["size"] = x86_native_static_image_checked_add(offset, length, "text-pool")
+    __tyrion_native_ast_builder_append(pool["entries"], 0, {"kind": 0, "text": text, "line": offset, "column": length})
+    pool["unique_count"] = pool["unique_count"] + 1
+    return pool
+
+
+def x86_native_token_pool_char_code(ch):
+    # Token strings are UTF-8 byte strings in the compiler runtime. This
+    # ordered table gives common source bytes stable codes; uncommon bytes use
+    # one collision bucket and are still compared exactly before deduplication.
+    alphabet = "\n\t\r abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_()[]{}.,:+-*/%=<>!\"'\\#@&|;?"
+    idx = 0
+    while idx < len(alphabet):
+        if alphabet[idx] == ch:
+            return idx + 1
+        idx = idx + 1
+    return 255
+
+
+def x86_native_token_pool_hash(text):
+    # Sample both ends so long diagnostics and generated symbol names do not
+    # all collide on a shared prefix. Exact equality resolves every collision.
+    modulus = 65521
+    value = len(text) % modulus
+    front_stop = len(text)
+    if front_stop > 8:
+        front_stop = 8
+    idx = 0
+    while idx < front_stop:
+        value = (value * 257 + x86_native_token_pool_char_code(text[idx])) % modulus
+        idx = idx + 1
+    if len(text) > 8:
+        idx = len(text) - 8
+        while idx < len(text):
+            value = (value * 257 + x86_native_token_pool_char_code(text[idx])) % modulus
+            idx = idx + 1
+    return value
+
+
+def x86_native_token_pool_map(pool, token_index):
+    return __tyrion_native_ast_builder_get(pool["mapping"], 0, token_index)
+
+
+def x86_native_token_pool_text(pool, entry_index):
+    return __tyrion_native_ast_builder_get(pool["entries"], 0, entry_index)["text"]
+
+
+def x86_native_build_token_pool(item):
+    pool = {"entries": __tyrion_native_ast_builder_create(), "mapping": __tyrion_native_ast_builder_create(), "size": 0, "raw_size": 0, "unique_count": 0}
+    heads = range(65536)
+    head_idx = 0
+    while head_idx < len(heads):
+        heads[head_idx] = 0
+        head_idx = head_idx + 1
+    token_count = native_static_program_token_count(item)
+    token_idx = 0
+    while token_idx < token_count:
+        token = native_static_program_token(item, token_idx)
+        if token["kind"] <= 0 or token["kind"] > len(generated_token_kind_names()):
+            fail("x86 static token image rejected code=token-kind;table=" + str(item["id"]) + ";index=" + str(token_idx))
+        if token["line"] < 0 or token["column"] < 0:
+            fail("x86 static token image rejected code=token-coordinate;table=" + str(item["id"]) + ";index=" + str(token_idx))
+        text = token["text"]
+        length = len(text)
+        pool["raw_size"] = x86_native_static_image_checked_add(pool["raw_size"], length, "raw-token-text")
+        bucket = x86_native_token_pool_hash(text)
+        cursor = heads[bucket]
+        entry_index = -1
+        while cursor > 0:
+            candidate = __tyrion_native_ast_builder_get(pool["entries"], 0, cursor - 1)
+            if candidate["text"] == text:
+                entry_index = cursor - 1
+                break
+            cursor = candidate["kind"]
+        if entry_index < 0:
+            entry_index = pool["unique_count"]
+            offset = pool["size"]
+            pool["size"] = x86_native_static_image_checked_add(offset, length, "text-pool")
+            __tyrion_native_ast_builder_append(pool["entries"], 0, {"kind": heads[bucket], "text": text, "line": offset, "column": length})
+            pool["unique_count"] = pool["unique_count"] + 1
+            heads[bucket] = entry_index + 1
+        entry = __tyrion_native_ast_builder_get(pool["entries"], 0, entry_index)
+        __tyrion_native_ast_builder_append(pool["mapping"], 0, {"kind": entry_index + 1, "text": "", "line": entry["line"], "column": entry["column"]})
+        token_idx = token_idx + 1
+    x86_native_verify_token_pool(item, pool)
+    return pool
+
+
+def x86_native_verify_token_pool(item, pool):
+    token_count = native_static_program_token_count(item)
+    if __tyrion_native_ast_builder_len(pool["mapping"], 0) != token_count:
+        fail("x86 static token image rejected code=pool-map-count;table=" + str(item["id"]))
+    if __tyrion_native_ast_builder_len(pool["entries"], 0) != pool["unique_count"]:
+        fail("x86 static token image rejected code=pool-entry-count;table=" + str(item["id"]))
+    expected_offset = 0
+    entry_idx = 0
+    while entry_idx < pool["unique_count"]:
+        entry = __tyrion_native_ast_builder_get(pool["entries"], 0, entry_idx)
+        if entry["line"] != expected_offset or entry["column"] != len(entry["text"]):
+            fail("x86 static token image rejected code=pool-entry-layout;table=" + str(item["id"]) + ";index=" + str(entry_idx))
+        expected_offset = x86_native_static_image_checked_add(expected_offset, entry["column"], "verify-unique-text-pool")
+        entry_idx = entry_idx + 1
+    if expected_offset != pool["size"]:
+        fail("x86 static token image rejected code=pool-size-mismatch;table=" + str(item["id"]))
+    verified_raw_size = 0
+    token_idx = 0
+    while token_idx < token_count:
+        token = native_static_program_token(item, token_idx)
+        length = len(token["text"])
+        mapping = x86_native_token_pool_map(pool, token_idx)
+        entry_index = mapping["kind"] - 1
+        if entry_index < 0 or entry_index >= pool["unique_count"]:
+            fail("x86 static token image rejected code=pool-entry-index;table=" + str(item["id"]) + ";index=" + str(token_idx))
+        entry = __tyrion_native_ast_builder_get(pool["entries"], 0, entry_index)
+        if mapping["line"] != entry["line"] or mapping["column"] != length or entry["column"] != length:
+            fail("x86 static token image rejected code=pool-token-mismatch;table=" + str(item["id"]) + ";index=" + str(token_idx))
+        if entry["text"] != token["text"]:
+            fail("x86 static token image rejected code=pool-text-mismatch;table=" + str(item["id"]) + ";index=" + str(token_idx))
+        verified_raw_size = x86_native_static_image_checked_add(verified_raw_size, length, "verify-raw-token-text")
+        token_idx = token_idx + 1
+    if verified_raw_size != pool["raw_size"]:
+        fail("x86 static token image rejected code=pool-raw-size-mismatch;table=" + str(item["id"]))
+    record_bytes = x86_native_static_image_checked_multiply(token_count, x86_native_static_token_image_record_size(), "token-records")
+    x86_native_static_image_checked_add(x86_native_static_token_image_header_size(), record_bytes, "image-header-records")
+    x86_native_static_image_checked_add(x86_native_static_token_image_header_size() + record_bytes, pool["size"], "complete-image")
+    return True
+
+
+def x86_native_emit_byte_span(out, text):
+    return asm_writer_append(out, ".ascii \"" + asm_escape_string(text) + "\"\n")
+
+
+def x86_native_static_token_image_size(token_count, pool_size):
+    record_bytes = x86_native_static_image_checked_multiply(token_count, x86_native_static_token_image_record_size(), "token-image-records")
+    image_size = x86_native_static_image_checked_add(x86_native_static_token_image_header_size(), record_bytes, "token-image-header")
+    return x86_native_static_image_checked_add(image_size, pool_size, "token-image-pool")
 
 
 def x86_native_static_record_label(table_id):
@@ -196,8 +419,8 @@ def x86_native_emit_instruction(out, instruction, instructions, index):
         out = x86_native_line(out, "call " + x86_native_dispatch_runtime_label(fields["table_id"]))
         return x86_native_line(out, "movq %rax, " + result_slot)
     if op == "ast_from_static":
-        out = x86_native_line(out, "leaq " + x86_native_static_token_label(fields["table_id"]) + "(%rip), %rdi")
-        out = x86_native_line(out, "movq $" + str(fields["token_count"]) + ", %rsi")
+        out = x86_native_line(out, "leaq " + x86_native_static_token_image_label(fields["table_id"]) + "(%rip), %rdi")
+        out = x86_native_line(out, "movq $" + x86_native_static_token_image_size_label(fields["table_id"]) + ", %rsi")
         out = x86_native_line(out, "leaq " + x86_native_static_record_label(fields["table_id"]) + "(%rip), %rdx")
         out = x86_native_line(out, "movq $" + str(fields["record_count"]) + ", %rcx")
         out = x86_native_line(out, "movq $" + str(fields["root"]) + ", %r8")
@@ -597,7 +820,7 @@ def x86_native_emit_ast_runtime(out):
     out = asm_writer_append(out, "__tyrion_native_ast_from_static:\n")
     out = x86_native_line(out, "pushq %rbp")
     out = x86_native_line(out, "movq %rsp, %rbp")
-    out = x86_native_line(out, "subq $80, %rsp")
+    out = x86_native_line(out, "subq $96, %rsp")
     out = x86_native_line(out, "movq %rdi, 0(%rsp)")
     out = x86_native_line(out, "movq %rsi, 8(%rsp)")
     out = x86_native_line(out, "movq %rdx, 16(%rsp)")
@@ -605,18 +828,50 @@ def x86_native_emit_ast_runtime(out):
     out = x86_native_line(out, "movq %r8, 32(%rsp)")
     out = x86_native_line(out, "testq %rdi, %rdi")
     out = x86_native_line(out, "je .L_tyrion_native_ast_from_static_fail")
-    out = x86_native_line(out, "testq %rsi, %rsi")
+    out = x86_native_line(out, "cmpq $" + str(x86_native_static_token_image_header_size()) + ", %rsi")
+    out = x86_native_line(out, "jb .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movabsq $" + str(x86_native_static_token_image_magic()) + ", %rax")
+    out = x86_native_line(out, "cmpq %rax, " + str(x86_native_static_token_image_magic_offset()) + "(%rdi)")
+    out = x86_native_line(out, "jne .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "cmpq $" + str(x86_native_static_token_image_version()) + ", " + str(x86_native_static_token_image_version_offset()) + "(%rdi)")
+    out = x86_native_line(out, "jne .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq " + str(x86_native_static_token_image_token_count_offset()) + "(%rdi), %r10")
+    out = x86_native_line(out, "testq %r10, %r10")
     out = x86_native_line(out, "je .L_tyrion_native_ast_from_static_fail")
-    out = x86_native_line(out, "cmpq $1048576, %rsi")
+    out = x86_native_line(out, "cmpq $1048576, %r10")
     out = x86_native_line(out, "ja .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq %r10, 56(%rsp)")
+    out = x86_native_line(out, "movq " + str(x86_native_static_token_image_pool_size_offset()) + "(%rdi), %r11")
+    out = x86_native_line(out, "movq %r11, 64(%rsp)")
+    out = x86_native_line(out, "cmpq $" + str(x86_native_static_token_image_record_size()) + ", " + str(x86_native_static_token_image_record_size_offset()) + "(%rdi)")
+    out = x86_native_line(out, "jne .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "cmpq $0, " + str(x86_native_static_token_image_reserved_offset()) + "(%rdi)")
+    out = x86_native_line(out, "jne .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq %r10, %rax")
+    out = x86_native_line(out, "imulq $" + str(x86_native_static_token_image_record_size()) + ", %rax")
+    out = x86_native_line(out, "jo .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "addq $" + str(x86_native_static_token_image_header_size()) + ", %rax")
+    out = x86_native_line(out, "jo .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq %rdi, %r9")
+    out = x86_native_line(out, "addq %rax, %r9")
+    out = x86_native_line(out, "jc .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq %r9, 72(%rsp)")
+    out = x86_native_line(out, "addq %r11, %rax")
+    out = x86_native_line(out, "jc .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "cmpq 8(%rsp), %rax")
+    out = x86_native_line(out, "jne .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq 16(%rsp), %rdx")
     out = x86_native_line(out, "testq %rdx, %rdx")
     out = x86_native_line(out, "je .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq 24(%rsp), %rcx")
     out = x86_native_line(out, "testq %rcx, %rcx")
     out = x86_native_line(out, "je .L_tyrion_native_ast_from_static_fail")
     out = x86_native_line(out, "cmpq $1048576, %rcx")
     out = x86_native_line(out, "ja .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq 32(%rsp), %r8")
     out = x86_native_line(out, "cmpq %rcx, %r8")
     out = x86_native_line(out, "jae .L_tyrion_native_ast_from_static_fail")
+    out = x86_native_line(out, "movq 56(%rsp), %rsi")
     out = x86_native_line(out, "imulq $" + str(generated_token_record_size()) + ", %rsi")
     out = x86_native_line(out, "jo .L_tyrion_native_ast_from_static_fail")
     out = x86_native_line(out, "addq $" + str(generated_token_vector_header_size()) + ", %rsi")
@@ -627,14 +882,47 @@ def x86_native_emit_ast_runtime(out):
     out = x86_native_line(out, "je .L_tyrion_native_ast_from_static_fail")
     out = x86_native_line(out, "movq %rax, 40(%rsp)")
     out = x86_native_line(out, "movb $" + str(generated_token_vector_magic()) + ", 0(%rax)")
-    out = x86_native_line(out, "movq 8(%rsp), %r10")
+    out = x86_native_line(out, "movq 56(%rsp), %r10")
     out = x86_native_line(out, "movq %r10, 8(%rax)")
     out = x86_native_line(out, "movq %r10, 16(%rax)")
-    out = x86_native_line(out, "leaq " + str(generated_token_vector_header_size()) + "(%rax), %rdi")
-    out = x86_native_line(out, "movq 0(%rsp), %rsi")
-    out = x86_native_line(out, "movq 8(%rsp), %rdx")
-    out = x86_native_line(out, "imulq $" + str(generated_token_record_size()) + ", %rdx")
-    out = x86_native_line(out, "call memcpy@PLT")
+    out = x86_native_line(out, "movq 0(%rsp), %rdi")
+    out = x86_native_line(out, "leaq " + str(x86_native_static_token_image_header_size()) + "(%rdi), %r9")
+    out = x86_native_line(out, "leaq " + str(generated_token_vector_header_size()) + "(%rax), %r8")
+    out = x86_native_line(out, "movq 56(%rsp), %rcx")
+    out = x86_native_line(out, "movq 72(%rsp), %r10")
+    out = x86_native_line(out, "movq 64(%rsp), %r11")
+    out = asm_writer_append(out, ".L_tyrion_native_ast_from_static_token_loop:\n")
+    out = x86_native_line(out, "testq %rcx, %rcx")
+    out = x86_native_line(out, "je .L_tyrion_native_ast_from_static_tokens_done")
+    out = x86_native_line(out, "movq " + str(x86_native_static_token_record_kind_offset()) + "(%r9), %rax")
+    out = x86_native_line(out, "testq %rax, %rax")
+    out = x86_native_line(out, "je .L_tyrion_native_ast_from_static_free_tokens")
+    out = x86_native_line(out, "cmpq $" + str(len(generated_token_kind_names())) + ", %rax")
+    out = x86_native_line(out, "ja .L_tyrion_native_ast_from_static_free_tokens")
+    out = x86_native_line(out, "movq %rax, " + str(generated_token_record_kind_offset()) + "(%r8)")
+    out = x86_native_line(out, "movq " + str(x86_native_static_token_record_text_offset_offset()) + "(%r9), %rsi")
+    out = x86_native_line(out, "movq " + str(x86_native_static_token_record_text_length_offset()) + "(%r9), %rdi")
+    out = x86_native_line(out, "cmpq %r11, %rsi")
+    out = x86_native_line(out, "ja .L_tyrion_native_ast_from_static_free_tokens")
+    out = x86_native_line(out, "movq %rsi, %rax")
+    out = x86_native_line(out, "addq %rdi, %rax")
+    out = x86_native_line(out, "jc .L_tyrion_native_ast_from_static_free_tokens")
+    out = x86_native_line(out, "cmpq %r11, %rax")
+    out = x86_native_line(out, "ja .L_tyrion_native_ast_from_static_free_tokens")
+    out = x86_native_line(out, "movq %r10, %rax")
+    out = x86_native_line(out, "addq %rsi, %rax")
+    out = x86_native_line(out, "jc .L_tyrion_native_ast_from_static_free_tokens")
+    out = x86_native_line(out, "movq %rax, " + str(generated_token_record_text_offset()) + "(%r8)")
+    out = x86_native_line(out, "movq %rdi, " + str(generated_token_record_text_length_offset()) + "(%r8)")
+    out = x86_native_line(out, "movq " + str(x86_native_static_token_record_line_offset()) + "(%r9), %rax")
+    out = x86_native_line(out, "movq %rax, " + str(generated_token_record_line_offset()) + "(%r8)")
+    out = x86_native_line(out, "movq " + str(x86_native_static_token_record_column_offset()) + "(%r9), %rax")
+    out = x86_native_line(out, "movq %rax, " + str(generated_token_record_column_offset()) + "(%r8)")
+    out = x86_native_line(out, "addq $" + str(x86_native_static_token_image_record_size()) + ", %r9")
+    out = x86_native_line(out, "addq $" + str(generated_token_record_size()) + ", %r8")
+    out = x86_native_line(out, "subq $1, %rcx")
+    out = x86_native_line(out, "jmp .L_tyrion_native_ast_from_static_token_loop")
+    out = asm_writer_append(out, ".L_tyrion_native_ast_from_static_tokens_done:\n")
     out = x86_native_line(out, "movq 24(%rsp), %rdi")
     out = x86_native_line(out, "movl $" + str(generated_ast_record_size()) + ", %esi")
     out = x86_native_line(out, "call calloc@PLT")
@@ -4143,17 +4431,39 @@ def x86_native_emit_expression_runtime(out):
     out = x86_native_line(out, "movb $" + str(generated_value_tag_none()) + ", " + str(generated_value_tag_offset()) + "(%r14)")
     out = x86_native_line(out, "jmp .L_tyrion_native_expr_eval_success")
     out = asm_writer_append(out, ".L_tyrion_native_expr_eval_float:\n")
-    out = x86_native_line(out, "movq " + str(generated_token_record_text_offset()) + "(%rax), %rdi")
-    out = x86_native_line(out, "movq " + str(generated_token_record_text_length_offset()) + "(%rax), %rcx")
-    out = x86_native_line(out, "testq %rcx, %rcx")
+    # libc strtod requires a terminator. Materialize a bounded temporary from
+    # the canonical pointer/length token view; pooled token correctness must
+    # never depend on adjacent bytes or a terminator in the static image.
+    out = x86_native_line(out, "movq " + str(generated_token_record_text_offset()) + "(%rax), %r12")
+    out = x86_native_line(out, "movq " + str(generated_token_record_text_length_offset()) + "(%rax), %r13")
+    out = x86_native_line(out, "testq %r13, %r13")
     out = x86_native_line(out, "je .L_tyrion_native_expr_eval_fail")
-    out = x86_native_line(out, "leaq (%rdi,%rcx), %r12")
+    out = x86_native_line(out, "cmpq $1048576, %r13")
+    out = x86_native_line(out, "ja .L_tyrion_native_expr_eval_fail")
+    out = x86_native_line(out, "leaq 1(%r13), %rdi")
+    out = x86_native_line(out, "call malloc@PLT")
+    out = x86_native_line(out, "testq %rax, %rax")
+    out = x86_native_line(out, "je .L_tyrion_native_expr_eval_fail")
+    out = x86_native_line(out, "movq %rax, 0(%rsp)")
+    out = x86_native_line(out, "movq %rax, %rdi")
+    out = x86_native_line(out, "movq %r12, %rsi")
+    out = x86_native_line(out, "movq %r13, %rdx")
+    out = x86_native_line(out, "call memcpy@PLT")
+    out = x86_native_line(out, "movq 0(%rsp), %rdi")
+    out = x86_native_line(out, "movb $0, 0(%rdi,%r13)")
     out = x86_native_line(out, "leaq 16(%rsp), %rsi")
     out = x86_native_line(out, "call strtod@PLT")
-    out = x86_native_line(out, "cmpq %r12, 16(%rsp)")
-    out = x86_native_line(out, "jne .L_tyrion_native_expr_eval_fail")
+    out = x86_native_line(out, "movq 0(%rsp), %rdi")
+    out = x86_native_line(out, "leaq 0(%rdi,%r13), %rax")
+    out = x86_native_line(out, "cmpq %rax, 16(%rsp)")
+    out = x86_native_line(out, "jne .L_tyrion_native_expr_eval_float_free_fail")
     out = x86_native_line(out, "movsd %xmm0, 0(%r14)")
+    out = x86_native_line(out, "call free@PLT")
     out = x86_native_line(out, "movb $" + str(generated_value_tag_float()) + ", " + str(generated_value_tag_offset()) + "(%r14)")
+    out = x86_native_line(out, "jmp .L_tyrion_native_expr_eval_success")
+    out = asm_writer_append(out, ".L_tyrion_native_expr_eval_float_free_fail:\n")
+    out = x86_native_line(out, "call free@PLT")
+    out = x86_native_line(out, "jmp .L_tyrion_native_expr_eval_fail")
     out = asm_writer_append(out, ".L_tyrion_native_expr_eval_success:\n")
     out = x86_native_line(out, "movl $1, %eax")
     out = x86_native_line(out, "jmp .L_tyrion_native_expr_eval_done")
@@ -15745,21 +16055,28 @@ def emit_linux_x86_64_native_module_asm_into(out, module):
         item = module["globals"][global_idx]
         token_count = native_static_program_token_count(item)
         record_count = native_static_program_record_count(item)
+        pool = x86_native_build_token_pool(item)
+        record_bytes = x86_native_static_image_checked_multiply(token_count, x86_native_static_token_image_record_size(), "metrics-token-records")
+        static_bytes = x86_native_static_token_image_size(token_count, pool["size"])
+        static_bytes_per_token = static_bytes / token_count
+        out = asm_writer_append(out, "# tyrion-static-token-metrics tokens=" + str(token_count) + " unique_texts=" + str(pool["unique_count"]) + " raw_text_bytes=" + str(pool["raw_size"]) + " pooled_text_bytes=" + str(pool["size"]) + " static_bytes_per_token=" + str(static_bytes_per_token) + "\n")
         out = asm_writer_append(out, ".section .rodata\n")
-        token_idx = 0
-        while token_idx < token_count:
-            token = native_static_program_token(item, token_idx)
-            out = asm_writer_append(out, x86_native_static_token_text_label(item["id"], token_idx) + ":\n")
-            out = asm_writer_append(out, ".asciz \"" + asm_escape_string(token["text"]) + "\"\n")
-            token_idx = token_idx + 1
-        out = asm_writer_append(out, ".section .data.rel.ro,\"aw\",@progbits\n")
         out = asm_writer_append(out, ".p2align 3\n")
-        out = asm_writer_append(out, x86_native_static_token_label(item["id"]) + ":\n")
+        out = asm_writer_append(out, ".set " + x86_native_static_token_image_size_label(item["id"]) + ", " + str(static_bytes) + "\n")
+        out = asm_writer_append(out, x86_native_static_token_image_label(item["id"]) + ":\n")
+        out = asm_writer_append(out, ".quad " + str(x86_native_static_token_image_magic()) + ", " + str(x86_native_static_token_image_version()) + ", " + str(token_count) + ", " + str(pool["size"]) + ", " + str(x86_native_static_token_image_record_size()) + ", 0\n")
         token_idx = 0
         while token_idx < token_count:
             token = native_static_program_token(item, token_idx)
-            out = asm_writer_append(out, ".quad " + str(token["kind"]) + ", " + x86_native_static_token_text_label(item["id"], token_idx) + ", " + str(len(token["text"])) + ", " + str(token["line"]) + ", " + str(token["column"]) + "\n")
+            mapping = x86_native_token_pool_map(pool, token_idx)
+            out = asm_writer_append(out, ".quad " + str(token["kind"]) + ", " + str(mapping["line"]) + ", " + str(mapping["column"]) + ", " + str(token["line"]) + ", " + str(token["column"]) + "\n")
             token_idx = token_idx + 1
+        out = asm_writer_append(out, x86_native_static_token_pool_label(item["id"]) + ":\n")
+        pool_idx = 0
+        while pool_idx < pool["unique_count"]:
+            out = x86_native_emit_byte_span(out, x86_native_token_pool_text(pool, pool_idx))
+            pool_idx = pool_idx + 1
+        out = asm_writer_append(out, ".byte 0\n")
         out = asm_writer_append(out, ".section .rodata\n")
         out = asm_writer_append(out, ".p2align 3\n")
         out = asm_writer_append(out, x86_native_static_record_label(item["id"]) + ":\n")

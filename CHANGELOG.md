@@ -35,6 +35,10 @@ Fixed:
 
 - Correct high-address heap-string copies in generated Darwin executables.
 - Correct nested compiler AST-builder behavior during descendant compilation.
+- Preserve target-emitter dependencies and parse compiler source into canonical
+  AST records before descendant compiler emission.
+- Keep target-specific assembly formatting isolated to its target backend and
+  emit valid Darwin stack-pointer arithmetic during descendant generation.
 - Correct the native x86-64 `zip()` call-frame argument-count slot.
 - Initialize copy-on-write mutation temporaries before every release path,
   eliminating uninitialized ownership checks during nested collection

@@ -5,6 +5,12 @@
 #
 # compiler / cli: responsibility-owned canonical compiler module.
 
+def compiler_usage_text():
+    return "Usage:\n  tyrionic --help\n  tyrionic --version\n  tyrionic --scan <input.ty>\n  tyrionic --tokens <input.ty>\n  tyrionic --token-summary <input.ty>\n  tyrionic --parse-summary <input.ty>\n  tyrionic --build <input.ty> --out <output>\n  tyrionic --build <input.ty> --out <output> --ext-static=<off|auto|required>\n  tyrionic --build <input.ty> --out <output> --ext-dir <path>"
+
+def compiler_version_text():
+    return "tyrionic compiler v0"
+
 def usage():
     print("Usage:")
     print("  tyrionic --help")
@@ -138,10 +144,10 @@ def cli_route_records_to_spec(records):
         spec["out_flag"] = "--out"
     return spec
 
-def build_compiler_cli_native(raw_source, program, input_path, output_path):
+def build_compiler_cli_native(program, input_path, output_path):
     target = host_target()
     artifact_path = output_path + ".tyn"
-    asm_path = make_asm_path(output_path)
+    asm_path = output_path + ".s"
     asm_writer = asm_writer_open(asm_path)
     if target["backend"] == "linux-x86_64":
         # Descendant x86 compilers use the same source-derived native IR route
@@ -149,8 +155,8 @@ def build_compiler_cli_native(raw_source, program, input_path, output_path):
         # AArch64 registers and must never be emitted into an x86 generation.
         asm_writer = emit_linux_x86_64_native_program_asm_into(asm_writer, program)
     else:
-        usage_text = compiler_program_function_print_text(program, "usage")
-        version_text = compiler_program_function_print_text(program, "version")
+        usage_text = compiler_usage_text()
+        version_text = compiler_version_text()
         cli_spec = collect_cli_spec(program)
         asm_writer = emit_compiler_cli_asm_into(asm_writer, target, usage_text, version_text, cli_spec)
     asm_writer_close(asm_writer)
@@ -194,7 +200,7 @@ def build_native_configured(input_path, output_path, extension_mode, extension_r
     raw_source = read_module_graph(input_path)
     program = parse_program(lex(raw_source))
     if program_has_function(program, "cli_main"):
-        if build_compiler_cli_native(raw_source, program, input_path, output_path):
+        if build_compiler_cli_native(program, input_path, output_path):
             return
         fail("unsupported compiler invocation or compiler-source build failed")
     if build_runtime_native_program_if_needed(raw_source, program, input_path, output_path, extension_mode, extension_root):

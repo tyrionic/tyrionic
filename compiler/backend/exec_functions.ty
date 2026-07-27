@@ -1280,10 +1280,29 @@ def emit_exec_fn_build_native_detect_compiler(out, target, exec_label):
     return out
 
 def emit_exec_fn_build_native_compiler_route(out, target, exec_label):
+    value_tag_x22 = generated_value_tag_mem("x22")
     value_tag_x23 = generated_value_tag_mem("x23")
 
+    asm_line(out, "strb wzr, [x22]")
+    asm_line(out, "strb wzr, " + value_tag_x22)
     asm_line(out, "strb wzr, [x23]")
     asm_line(out, "strb wzr, " + value_tag_x23)
+    asm_addr(out, target, "x0", lowered_function_label("L_fn_", "lex"))
+    asm_line(out, "mov x1, x21")
+    asm_line(out, "mov x2, x22")
+    asm_line(out, "mov x7, #2")
+    asm_line(out, "mov x8, #1")
+    asm_line(out, "bl L_call_lowered_compiler_function")
+    asm_line(out, "cbz w0, " + exec_label + "_fail")
+    asm_addr(out, target, "x0", lowered_function_label("L_fn_", "parse_program"))
+    asm_line(out, "mov x1, x22")
+    asm_line(out, "mov x2, x23")
+    asm_line(out, "mov x7, #2")
+    asm_line(out, "mov x8, #1")
+    asm_line(out, "bl L_call_lowered_compiler_function")
+    asm_line(out, "cbz w0, " + exec_label + "_fail")
+    asm_line(out, "strb wzr, [x22]")
+    asm_line(out, "strb wzr, " + value_tag_x22)
     asm_line(out, "mov x0, x24")
     asm_line(out, "mov x1, x19")
     asm_line(out, "bl L_generated_value_set_cstr")
@@ -1294,18 +1313,18 @@ def emit_exec_fn_build_native_compiler_route(out, target, exec_label):
     asm_line(out, "cbz w0, " + exec_label + "_fail")
     asm_addr(out, target, "x0", "L_runtime_fn_build_compiler_cli_native")
     asm_line(out, "mov x26, #3")
-    asm_line(out, "mov x1, x21")
+    asm_line(out, "mov x1, x23")
     asm_line(out, "mov x2, x24")
     asm_line(out, "mov x3, x25")
-    asm_line(out, "mov x4, x23")
+    asm_line(out, "mov x4, x22")
     asm_line(out, "mov x7, #4")
     asm_line(out, "mov x8, #1")
     asm_line(out, "bl L_call_lowered_compiler_function")
     asm_line(out, "cbz w0, " + exec_label + "_fail")
-    asm_line(out, "ldrb w9, " + value_tag_x23)
+    asm_line(out, "ldrb w9, " + value_tag_x22)
     asm_line(out, "cmp w9, #3")
     asm_line(out, "b.ne " + exec_label + "_fallback")
-    asm_line(out, "ldrb w9, [x23]")
+    asm_line(out, "ldrb w9, [x22]")
     asm_line(out, "cmp w9, #84")
     asm_line(out, "b.eq " + exec_label + "_success")
     return out
@@ -3203,7 +3222,7 @@ def emit_exec_fn_asm_writer_format(out, target, name):
     asm_line(out, "bl L_generated_value_zero_slot")
     asm_line(out, "mov x0, x24")
     asm_line(out, "bl L_generated_value_zero_slot")
-    if name == "asm_line":
+    if name == "asm_line" and target["backend"] == "linux-x86_64":
         # Fixed helper bodies must preserve the source asm_line contract. The
         # writer owns the backend mode; translate one semantic line only when
         # this concrete writer is producing a Linux/x86-64 artifact.

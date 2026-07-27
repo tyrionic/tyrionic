@@ -30,6 +30,9 @@ def collect_lowered_function_table_plan_payload_seed(program, build_plan):
     names = lowered_function_append_name(names, "asm_writer_set_backend")
     names = lowered_function_append_name(names, "asm_writer_is_x86")
     names = lowered_function_append_name(names, "runtime_native_linux_aarch64_asm_text")
+    names = lowered_function_append_source_if_present(program, names, "emit_darwin_aarch64_compiler_cli_asm_into")
+    names = lowered_function_append_source_if_present(program, names, "emit_linux_aarch64_compiler_cli_asm_into")
+    names = lowered_function_append_source_if_present(program, names, "emit_linux_x86_64_compiler_cli_asm_into")
     if program_has_function(program, "usage"):
         names = lowered_function_append_name(names, "usage")
     if program_has_function(program, "version"):
@@ -1615,6 +1618,10 @@ def lowered_function_append_source_if_present(program, names, name):
     return names
 
 def lowered_function_append_reachable_call(program, names, name):
+    # Compiler-AST intrinsics execute while constructing the descendant
+    # compiler. They are not callable helper records in that descendant.
+    if primitive_schema_capability(name) == "compiler-ast":
+        return names
     if lowered_function_has_fixed_plan(name):
         return lowered_function_append_name(names, name)
     fn = program_find_function_or_none(program, name)
@@ -1868,11 +1875,11 @@ def lowered_function_expand_reachable_sources(program, names):
     idx = 0
     while idx < len(names):
         fn = program_find_function_or_none(program, names[idx])
-        # Fixed side-effect primitives are compiler-owned ABI boundaries. Their
-        # Tyrionic definitions document semantics but are not executable bodies,
-        # so traversing them invents dead dependencies such as the list passed
-        # to __tyrion_run_tool inside run_tool.
-        if fn != none and not lowered_function_is_native_side_effect_primitive(names[idx]):
+        # Fixed plans are compiler-owned ABI boundaries. Their Tyrionic bodies
+        # document semantics but are not executed by the generated compiler, so
+        # traversing them invents dependencies that the selected native plan
+        # does not call.
+        if fn != none and not lowered_function_has_fixed_plan(names[idx]):
             body_idx = 0
             while body_idx < len(fn["body"]):
                 names = lowered_function_collect_stmt_calls(program, names, fn["body"][body_idx])
@@ -1891,6 +1898,9 @@ def collect_lowered_function_table_plan(program, build_plan):
     names = lowered_function_append_name(names, "asm_writer_set_backend")
     names = lowered_function_append_name(names, "asm_writer_is_x86")
     names = lowered_function_append_name(names, "runtime_native_linux_aarch64_asm_text")
+    names = lowered_function_append_source_if_present(program, names, "emit_darwin_aarch64_compiler_cli_asm_into")
+    names = lowered_function_append_source_if_present(program, names, "emit_linux_aarch64_compiler_cli_asm_into")
+    names = lowered_function_append_source_if_present(program, names, "emit_linux_x86_64_compiler_cli_asm_into")
     if program_has_function(program, "usage"):
         names = lowered_function_append_name(names, "usage")
     if program_has_function(program, "version"):

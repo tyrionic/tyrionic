@@ -38,7 +38,7 @@ def asm_escape_string(text):
 
 def asm_line(out, text):
     if asm_writer_is_x86(out):
-        return asm_writer_append(out, x86_semantic_lower_line(text))
+        fail("legacy semantic x86 writer removed; use the native x86 emitter")
     out = asm_writer_append(out, "    ")
     out = asm_writer_append(out, text)
     out = asm_writer_append(out, "\n")
@@ -98,10 +98,7 @@ def asm_global_c_main(out, target):
     out = asm_dir(out, ".globl main")
     out = asm_label(out, "main")
     if target["backend"] == "linux-x86_64":
-        out = asm_raw(out, "    lea __tyrion_vstack_end(%rip), %r10\n")
-        out = asm_raw(out, "    mov %r10, __tyrion_vsp(%rip)\n")
-        out = asm_raw(out, "    mov %rdi, __tyrion_vregs(%rip)\n")
-        out = asm_raw(out, "    mov %rsi, __tyrion_vregs+8(%rip)\n")
+        fail("legacy semantic x86 entry writer removed; use the native x86 emitter")
     return out
 
 def asm_addr(out, target, reg, label):
@@ -111,8 +108,7 @@ def asm_addr(out, target, reg, label):
         out = asm_line(out, "adrp " + reg + ", " + label)
         return asm_line(out, "add " + reg + ", " + reg + ", :lo12:" + label)
     if target["backend"] == "linux-x86_64":
-        out = asm_line(out, "adrp " + reg + ", " + label)
-        return asm_line(out, "add " + reg + ", " + reg + ", :lo12:" + label)
+        fail("legacy semantic x86 address writer removed; use the native x86 emitter")
     fail("unsupported address materialization target: " + target["triple"])
 
 def asm_writer_open(path):

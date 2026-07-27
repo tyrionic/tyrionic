@@ -583,6 +583,12 @@ def application_direct_builtin_supported(name):
         return True
     if implementation == "host_load" or implementation == "host_call" or implementation == "host_unload":
         return True
+    if implementation == "ast_builder_create" or implementation == "ast_builder_len":
+        return True
+    if implementation == "ast_builder_append" or implementation == "ast_builder_finish" or implementation == "token_builder_append":
+        return True
+    if implementation == "ast_builder_get":
+        return True
     return False
 
 
@@ -1045,3 +1051,14 @@ def analyze_application_statement(stmt, function_names, in_function, in_loop, pa
 
 def analyze_application_program(program, function_names):
     return analyze_application_statements(program["items"], function_names, False, False, "program")
+
+
+def application_analysis_diagnostic(application):
+    return "direct-native analysis rejected code=" + application["code"] + ";kind=" + application_analysis_kind(application["code"], application["detail"]) + ";position=" + application["path"] + ";detail=" + application["detail"]
+
+
+def require_application_analysis(program, function_names):
+    application = analyze_application_program(program, function_names)
+    if not application["ok"]:
+        fail(application_analysis_diagnostic(application))
+    return application

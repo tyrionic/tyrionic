@@ -45,7 +45,7 @@ def command_tokens(path):
     source = read_text_file(path)
     tokens = lex(source)
     idx = 0
-    while idx < len(tokens):
+    while idx < token_count(tokens):
         print(str(idx) + ":" + token_kind_at(tokens, idx) + ":" + token_text_at(tokens, idx))
         idx = idx + 1
 
@@ -113,6 +113,10 @@ def cli_spec_record_route(spec, info, action):
         if info["argc"] == 4 and first != "" and third != "":
             spec["build_flag"] = first
             spec["out_flag"] = third
+    elif action == "build_native_with_options":
+        if first != "" and third != "":
+            spec["build_flag"] = first
+            spec["out_flag"] = third
     elif action != "":
         if first != "":
             spec["unsupported_flags"] = method_append(spec["unsupported_flags"], first)
@@ -134,17 +138,21 @@ def cli_route_records_to_spec(records):
         spec["out_flag"] = "--out"
     return spec
 
-def build_compiler_cli_native(raw_source, input_path, output_path):
+def build_compiler_cli_native(raw_source, program, input_path, output_path):
     target = host_target()
     artifact_path = output_path + ".tyn"
-    tokens = lex(raw_source)
-    program = parse_program(tokens)
-    usage_text = compiler_program_function_print_text(program, "usage")
-    version_text = compiler_program_function_print_text(program, "version")
-    cli_spec = collect_cli_spec(program)
     asm_path = make_asm_path(output_path)
     asm_writer = asm_writer_open(asm_path)
-    asm_writer = emit_compiler_cli_asm_into(asm_writer, target, usage_text, version_text, cli_spec)
+    if target["backend"] == "linux-x86_64":
+        # Descendant x86 compilers use the same source-derived native IR route
+        # as the seed promotion. The compatibility section graph models
+        # AArch64 registers and must never be emitted into an x86 generation.
+        asm_writer = emit_linux_x86_64_native_program_asm_into(asm_writer, program)
+    else:
+        usage_text = compiler_program_function_print_text(program, "usage")
+        version_text = compiler_program_function_print_text(program, "version")
+        cli_spec = collect_cli_spec(program)
+        asm_writer = emit_compiler_cli_asm_into(asm_writer, target, usage_text, version_text, cli_spec)
     asm_writer_close(asm_writer)
     # The sidecar is diagnostic metadata; compiler capability comes from the
     # streamed executable and strict artifact proofs, not a reconstructed IR.
@@ -153,19 +161,72 @@ def build_compiler_cli_native(raw_source, input_path, output_path):
         fail("native-link rejected code=link-failed;path=" + asm_path + ";output=" + output_path)
     return True
 
-def build_runtime_native_program_if_needed(raw_source, input_path, output_path):
-    return build_runtime_native_direct_program_if_supported(raw_source, input_path, output_path)
+def build_runtime_native_x86_program(program, output_path, extension_mode, extension_root):
+    artifact_path = output_path + ".tyn"
+    asm_path = make_asm_path(output_path)
+    extensions = static_extension_build_plan(program, extension_mode, extension_root)
+    asm_writer = asm_writer_open(asm_path)
+    asm_writer = emit_linux_x86_64_native_program_extensions_asm_into(asm_writer, program, extensions)
+    asm_writer_close(asm_writer)
+    artifact = "tyrion-runtime-native v1\nnative-build-target-kind=application\nnative-exec-mode=direct-native\n"
+    if len(extensions) > 0:
+        artifact = artifact + "native-static-extension-count=" + str(len(extensions)) + "\n"
+    write_text_file(artifact_path, artifact)
+    link_plan = {"extensions": extensions, "extension_count": len(extensions)}
+    if not link_runtime_native_direct_program(host_target(), asm_path, output_path, link_plan):
+        fail("native-link rejected code=link-failed;path=" + asm_path + ";output=" + output_path)
+    return True
 
-def build_native(input_path, output_path):
+def build_runtime_native_program_if_needed(raw_source, program, input_path, output_path, extension_mode, extension_root):
+    target = host_target()
+    # The architecture-neutral analysis contract owns source rejection.
+    # Backend emitters only receive accepted programs and therefore cannot
+    # expose private lowering diagnostics.
+    require_application_analysis(program, runtime_native_function_names(program))
+    if target["backend"] == "linux-x86_64":
+        # Applications and compiler descendants share the same verified native
+        # IR path. Never route x86 applications through the historical
+        # AArch64-shaped runtime translator.
+        return build_runtime_native_x86_program(program, output_path, extension_mode, extension_root)
+    return build_runtime_native_direct_program_if_supported_configured(raw_source, input_path, output_path, extension_mode, extension_root)
+
+def build_native_configured(input_path, output_path, extension_mode, extension_root):
     raw_source = read_module_graph(input_path)
     program = parse_program(lex(raw_source))
     if program_has_function(program, "cli_main"):
-        if build_compiler_cli_native(raw_source, input_path, output_path):
+        if build_compiler_cli_native(raw_source, program, input_path, output_path):
             return
         fail("unsupported compiler invocation or compiler-source build failed")
-    if build_runtime_native_program_if_needed(raw_source, input_path, output_path):
+    if build_runtime_native_program_if_needed(raw_source, program, input_path, output_path, extension_mode, extension_root):
         return
     fail("direct native lowering does not support this program")
+
+def build_native(input_path, output_path):
+    return build_native_configured(input_path, output_path, "auto", "./extensions")
+
+def build_native_with_options(args):
+    extension_mode = "auto"
+    extension_root = "./extensions"
+    idx = 4
+    while idx < len(args):
+        arg = args[idx]
+        if arg == "--ext-static=off":
+            extension_mode = "off"
+            idx = idx + 1
+        elif arg == "--ext-static=auto":
+            extension_mode = "auto"
+            idx = idx + 1
+        elif arg == "--ext-static=required":
+            extension_mode = "required"
+            idx = idx + 1
+        elif arg == "--ext-dir":
+            if idx + 1 >= len(args):
+                fail("missing path after --ext-dir")
+            extension_root = args[idx + 1]
+            idx = idx + 2
+        else:
+            fail("unknown or invalid compiler arguments")
+    return build_native_configured(args[1], args[3], extension_mode, extension_root)
 
 def cli_main(args):
     if len(args) == 0:
@@ -191,5 +252,14 @@ def cli_main(args):
         return
     if len(args) == 4 and args[0] == "--build" and args[2] == "--out":
         build_native(args[1], args[3])
+        return
+    if len(args) == 5 and args[0] == "--build" and args[2] == "--out":
+        build_native_with_options(args)
+        return
+    if len(args) == 6 and args[0] == "--build" and args[2] == "--out":
+        build_native_with_options(args)
+        return
+    if len(args) == 7 and args[0] == "--build" and args[2] == "--out":
+        build_native_with_options(args)
         return
     fail("unknown or invalid compiler arguments")

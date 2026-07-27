@@ -12748,9 +12748,7 @@ def runtime_native_append_target_asm_text(out, text, target):
             if line != "":
                 out = asm_raw(out, line + "\n")
         elif target["backend"] == "linux-x86_64":
-            line = runtime_native_x86_asm_line(line)
-            if line != "":
-                out = asm_raw(out, line)
+            fail("legacy semantic x86 runtime renderer removed; use the native x86 emitter")
         else:
             fail("runtime-native assembly text target is not implemented: " + target["backend"])
         idx = idx + 1
@@ -12759,55 +12757,10 @@ def runtime_native_append_target_asm_text(out, text, target):
 
 def runtime_native_target_asm_text(text, target):
     if target["backend"] == "linux-x86_64":
-        # Descendant runtime templates contain instructions and relocations
-        # split across dynamic fragments. Preserve their canonical semantic
-        # form here; runtime_native_x86_asm_text lowers the completed body.
-        return text
+        fail("legacy semantic x86 runtime renderer removed; use the native x86 emitter")
     if target["backend"] == "linux-aarch64":
         return runtime_native_linux_aarch64_asm_text(text)
     return text
-
-
-def runtime_native_x86_asm_line(line):
-    # Runtime-direct assembly is assembled from complete and partial semantic
-    # fragments. Translate only after those fragments have formed full lines.
-    line = line.strip()
-    line = runtime_native_linux_aarch64_line(line)
-    if line == "":
-        return ""
-    if line == "main:":
-        out = "main:\n"
-        out = out + "    lea __tyrion_vstack_end(%rip), %r10\n"
-        out = out + "    mov %r10, __tyrion_vsp(%rip)\n"
-        out = out + "    mov %rdi, __tyrion_vregs(%rip)\n"
-        out = out + "    mov %rsi, __tyrion_vregs+8(%rip)\n"
-        return out
-    if line[len(line) - 1] == ":":
-        return line + "\n"
-    return x86_semantic_lower_line(line)
-
-
-def runtime_native_x86_virtual_state_text():
-    out = ".section .bss\n.p2align 4\n"
-    out = out + "__tyrion_vregs:\n.zero 248\n__tyrion_vfregs:\n.zero 256\n"
-    out = out + "__tyrion_vsp:\n.zero 8\n.p2align 4\n"
-    out = out + "__tyrion_vstack:\n.zero 67108864\n"
-    out = out + "__tyrion_vstack_end:\n"
-    return out
-
-
-def runtime_native_x86_asm_body_text(text):
-    out = ""
-    lines = text.split("\n")
-    idx = 0
-    while idx < len(lines):
-        out = out + runtime_native_x86_asm_line(lines[idx])
-        idx = idx + 1
-    return out
-
-
-def runtime_native_x86_asm_text(text):
-    return runtime_native_x86_virtual_state_text() + runtime_native_x86_asm_body_text(text)
 
 
 def emit_native_runtime_direct_data_terminal(out, target):

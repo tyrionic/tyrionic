@@ -41,6 +41,88 @@ def generated_token_record_column_offset():
     return 32
 
 
+def generated_builder_token_record_size():
+    return 48
+
+
+def generated_builder_token_kind_offset():
+    return 0
+
+
+def generated_builder_token_kind_length_offset():
+    return 8
+
+
+def generated_builder_token_text_offset():
+    return 16
+
+
+def generated_builder_token_text_length_offset():
+    return 24
+
+
+def generated_builder_token_line_offset():
+    return 32
+
+
+def generated_builder_token_column_offset():
+    return 40
+
+
+def generated_token_kind_names():
+    return ["EOF", "NEWLINE", "INDENT", "DEDENT", "IDENTIFIER", "STRING", "INT", "FLOAT", "KW_DEF", "KW_CLASS", "KW_IF", "KW_ELIF", "KW_ELSE", "KW_WHILE", "KW_FOR", "KW_IN", "KW_RETURN", "KW_RAISE", "KW_TRY", "KW_EXCEPT", "KW_FINALLY", "KW_WITH", "KW_AS", "KW_AND", "KW_OR", "KW_NOT", "KW_TRUE", "KW_FALSE", "KW_NONE", "KW_BREAK", "KW_CONTINUE", "KW_UNLESS", "KW_LAMBDA", "KW_YIELD", "LPAREN", "RPAREN", "LBRACE", "RBRACE", "LBRACKET", "RBRACKET", "COMMA", "COLON", "DOT", "MINUS", "STAR", "SLASH", "PERCENT", "PLUS", "EQ", "UNKNOWN", "LT", "GT", "PLUSEQ", "EQEQ", "NE", "LE", "GE"]
+
+
+def generated_token_kind_id(name):
+    names = generated_token_kind_names()
+    idx = 0
+    while idx < len(names):
+        if names[idx] == name:
+            return idx + 1
+        idx = idx + 1
+    fail("generated ABI rejected unknown token kind: " + name)
+
+
+def generated_token_kind_identifier():
+    return generated_token_kind_id("IDENTIFIER")
+
+
+def generated_token_kind_string():
+    return generated_token_kind_id("STRING")
+
+
+def generated_token_kind_int():
+    return generated_token_kind_id("INT")
+
+
+def generated_token_kind_float():
+    return generated_token_kind_id("FLOAT")
+
+
+def generated_token_kind_minus():
+    return generated_token_kind_id("MINUS")
+
+
+def generated_token_kind_plus():
+    return generated_token_kind_id("PLUS")
+
+
+def generated_token_kind_not():
+    return generated_token_kind_id("KW_NOT")
+
+
+def generated_token_kind_true():
+    return generated_token_kind_id("KW_TRUE")
+
+
+def generated_token_kind_false():
+    return generated_token_kind_id("KW_FALSE")
+
+
+def generated_token_kind_none():
+    return generated_token_kind_id("KW_NONE")
+
+
 def generated_ast_arena_magic():
     return 168
 
@@ -133,6 +215,49 @@ def generated_ast_handle_parent_offset():
     return 72
 
 
+def generated_environment_magic():
+    return 171
+
+
+def generated_environment_header_size():
+    return 32
+
+
+def generated_environment_refcount_offset():
+    # Bytes 1..7 of the environment header follow the one-byte magic. Keep a
+    # 32-bit lexical-scope reference count in bytes 4..7 without changing the
+    # established 32-byte entry base.
+    return 4
+
+
+def generated_environment_entry_size():
+    return 144
+
+
+def generated_environment_count_offset():
+    return 8
+
+
+def generated_environment_capacity_offset():
+    return 16
+
+
+def generated_environment_parent_offset():
+    return 24
+
+
+def generated_environment_entry_name_offset():
+    return 0
+
+
+def generated_environment_entry_name_length_offset():
+    return 8
+
+
+def generated_environment_entry_value_offset():
+    return 16
+
+
 def generated_ast_kind_leaf():
     return 1
 
@@ -161,6 +286,10 @@ def generated_ast_kind_slice():
     return 7
 
 
+def generated_ast_kind_argument_link():
+    return 8
+
+
 def generated_ast_kind_item_link():
     return 9
 
@@ -185,12 +314,36 @@ def generated_ast_kind_dict():
     return 14
 
 
+def generated_ast_kind_attr():
+    return 15
+
+
 def generated_ast_kind_comprehension():
     return 16
 
 
+def generated_ast_kind_lambda():
+    return 17
+
+
 def generated_ast_kind_unpack_target():
     return 20
+
+
+def generated_assignment_target_var():
+    return 301
+
+
+def generated_assignment_target_index():
+    return 302
+
+
+def generated_assignment_target_unpack():
+    return 303
+
+
+def generated_assignment_target_attr():
+    return 304
 
 
 def generated_stmt_kind_assign():
@@ -265,6 +418,42 @@ def generated_stmt_kind_except():
     return 118
 
 
+def generated_stmt_kind_yield():
+    return 119
+
+
+def generated_stmt_kind_class():
+    return 120
+
+
+def generated_stmt_kind_raise():
+    return 121
+
+
+def generated_flow_failure():
+    return 0
+
+
+def generated_flow_normal():
+    return 1
+
+
+def generated_flow_return():
+    return 2
+
+
+def generated_flow_break():
+    return 3
+
+
+def generated_flow_continue():
+    return 4
+
+
+def generated_flow_raise():
+    return 5
+
+
 # Generated values occupy 128-byte slots. Byte 127 is the stable value tag and
 # byte 126 is the owner discriminator. Owner 0 is inline/borrowed, owner 1 owns
 # the pointer in byte 0, and owners 2/3 identify canonical typed aggregate
@@ -333,6 +522,26 @@ def generated_value_tag_object():
     return 6
 
 
+def generated_object_refcount_offset():
+    return 0
+
+
+def generated_object_class_name_offset():
+    return 8
+
+
+def generated_object_class_name_length_offset():
+    return 16
+
+
+def generated_object_fields_offset():
+    return 24
+
+
+def generated_object_size():
+    return 32
+
+
 def generated_value_tag_alias():
     # Non-owning compiler-internal alias. Byte 0 points at another live value
     # slot; aliases must not escape the frame that owns the referent.
@@ -377,8 +586,21 @@ def generated_value_tag_tcp_socket():
     return 13
 
 
-# Tags 14, 15, and 16 are reserved. They must not be assigned by target-local
-# code; adding a value kind requires a canonical ABI version and lifetime proof.
+def generated_value_tag_ast_builder():
+    # Pointer in byte 0 to a refcounted compiler AST builder. The builder owns
+    # two canonical list slots (tokens and records). Copy retains the descriptor;
+    # release drops both lanes only when the final reference is released.
+    return 14
+
+
+def generated_value_tag_extension_handle():
+    # Static extension table index in bytes 0..7. The handle owns no dynamic
+    # resource; copy is scalar and unload is an idempotent semantic operation.
+    return 15
+
+
+# Tag 16 is reserved. It must not be assigned by target-local code; adding a
+# value kind requires a canonical ABI version and lifetime proof.
 def generated_value_tag_writer():
     # Compiler-owned assembly writer pointer in byte 0. The writer record owns
     # its growable byte buffer and is retained/released explicitly.
@@ -406,6 +628,32 @@ def generated_value_tag_generator():
     # Owned resumable generator state. Byte 0 points to the resume/state/local
     # record used by the canonical iterator ABI.
     return 21
+
+
+def generated_value_tag_closure():
+    # Owned closure descriptor containing a retained AST handle, lambda record
+    # index, and retained defining lexical environment.
+    return 22
+
+
+def generated_closure_refcount_offset():
+    return 0
+
+
+def generated_closure_ast_offset():
+    return 8
+
+
+def generated_closure_record_offset():
+    return 16
+
+
+def generated_closure_environment_offset():
+    return 24
+
+
+def generated_closure_size():
+    return 32
 
 
 def generated_abi_contract_text():

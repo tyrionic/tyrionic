@@ -39,7 +39,7 @@ jobs:
       - name: Checkout Bootstrap Compiler
         uses: actions/checkout@v6
         with:
-          repository: tyrionic/tyrionic-bootstrap-compiler
+          repository: tyrionic/tyrionc
           path: bootstrap
 
       - name: Compile Bootstrap Compiler

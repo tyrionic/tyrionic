@@ -6,10 +6,13 @@
 import compiler.core
 import compiler.module_graph
 import compiler.generated_abi
+import compiler.native_ir
+import compiler.native_ir_verify
 import compiler.target_contract
 import compiler.primitives
 import compiler.lexer
 import compiler.frontend
+import compiler.native_ir_source
 import compiler.application_semantics
 import compiler.writer
 import compiler.lowering
@@ -22,7 +25,7 @@ import compiler.backend.native_runtime
 import compiler.backend.components
 import compiler.targets.darwin_aarch64
 import compiler.targets.linux
-import compiler.targets.linux_x86_64
+import compiler.targets.linux_x86_64_native
 import compiler.cli
 
 

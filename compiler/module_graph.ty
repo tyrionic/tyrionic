@@ -17,7 +17,15 @@ def module_graph_import_name(line):
 def module_graph_metadata_line(line):
     text = trim_spaces(line)
     parts = text.split(" ")
-    return len(parts) >= 1 and (parts[0] == "module" or parts[0] == "export")
+    if len(parts) < 2:
+        return False
+    if parts[0] != "module" and parts[0] != "export":
+        return False
+    name = parts[1]
+    if name == "":
+        return False
+    first = name[0]
+    return (first >= "a" and first <= "z") or (first >= "A" and first <= "Z") or first == "_"
 
 
 def module_graph_dir(path):
@@ -62,9 +70,9 @@ def module_graph_top_level_symbol(line):
 
 def module_graph_visit(path, root_path, loaded, active, symbols, depth):
     if depth > 64:
-        fail("module graph depth exceeded: " + path)
+        fail("module-graph rejected code=depth-exceeded;path=" + path)
     if list_contains_string(active, path):
-        fail("module cycle: " + path)
+        fail("module-graph rejected code=cycle;path=" + path)
     if list_contains_string(loaded, path):
         return {"source": "", "loaded": loaded, "symbols": symbols}
     next_active = []
@@ -92,7 +100,7 @@ def module_graph_visit(path, root_path, loaded, active, symbols, depth):
             symbol = module_graph_top_level_symbol(line)
             if symbol != "":
                 if list_contains_string(symbols, symbol):
-                    fail("duplicate module definition: " + symbol)
+                    fail("module-graph rejected code=duplicate-symbol;detail=" + symbol)
                 symbols.append(symbol)
             out = out + line + "\n"
         idx = idx + 1

@@ -1,0 +1,511 @@
+# Tyrionic Compiler
+# (c) 2026 Dennis Vink — https://drvink.com/
+# Project: https://github.com/tyrionic/
+# SPDX-License-Identifier: MIT
+#
+# Structural verifier for architecture-neutral native IR records.
+
+def native_ir_constant_exists(module, constant_id):
+    idx = 0
+    while idx < len(module["constants"]):
+        if module["constants"][idx]["id"] == constant_id:
+            return True
+        idx = idx + 1
+    return False
+
+
+def native_ir_external(module, name):
+    idx = 0
+    while idx < len(module["externals"]):
+        external = module["externals"][idx]
+        if external["name"] == name:
+            return external
+        idx = idx + 1
+    fail("native-ir rejected code=external-not-found;name=" + name)
+
+
+def native_ir_function_by_name(module, name):
+    idx = 0
+    while idx < len(module["functions"]):
+        function = module["functions"][idx]
+        if function["name"] == name:
+            return function
+        idx = idx + 1
+    fail("native-ir rejected code=function-not-found;name=" + name)
+
+
+def native_ir_dispatch_table_by_id(module, table_id):
+    idx = 0
+    while idx < len(module["dispatch_tables"]):
+        table = module["dispatch_tables"][idx]
+        if table["id"] == table_id:
+            return table
+        idx = idx + 1
+    fail("native-ir rejected code=dispatch-table-not-found;id=" + str(table_id))
+
+
+def native_ir_static_program_by_id(module, table_id):
+    idx = 0
+    while idx < len(module["globals"]):
+        item = module["globals"][idx]
+        if item["kind"] == "static_program" and item["id"] == table_id:
+            return item
+        idx = idx + 1
+    fail("native-ir rejected code=static-program-not-found;id=" + str(table_id))
+
+
+def native_ir_value_type_before(instructions, stop, result):
+    idx = 0
+    while idx < stop:
+        instruction = instructions[idx]
+        if instruction["result"] == result:
+            return instruction["type"]
+        idx = idx + 1
+    fail("native-ir rejected code=value-not-defined;value=" + str(result))
+
+
+def native_ir_integer_type(value_type):
+    return value_type == "i32" or value_type == "i64" or value_type == "usize" or value_type == "isize"
+
+
+def native_ir_verify_arg_types(prior, args, types, op):
+    if len(args) != len(types):
+        fail("native-ir rejected code=operation-arity;op=" + op)
+    arg_idx = 0
+    while arg_idx < len(args):
+        actual_type = native_ir_value_type_before(prior, len(prior), args[arg_idx])
+        if actual_type != types[arg_idx]:
+            fail("native-ir rejected code=operation-argument-type;op=" + op + ";index=" + str(arg_idx) + ";expected=" + types[arg_idx] + ";actual=" + actual_type)
+        arg_idx = arg_idx + 1
+
+
+def verify_native_ir_instruction(module, function, prior, instruction):
+    expected_result = len(prior)
+    if instruction["result"] != expected_result:
+        fail("native-ir rejected code=noncanonical-result-id;expected=" + str(expected_result) + ";actual=" + str(instruction["result"]))
+    op = instruction["op"]
+    fields = instruction["fields"]
+    if op == "parameter":
+        index = fields["index"]
+        if index < 0 or index >= len(function["parameters"]):
+            fail("native-ir rejected code=parameter-index;index=" + str(index))
+        if instruction["type"] != function["parameters"][index]:
+            fail("native-ir rejected code=parameter-type;index=" + str(index))
+        return
+    if op == "const_int":
+        if not native_ir_integer_type(instruction["type"]):
+            fail("native-ir rejected code=const-int-type")
+        return
+    if op == "const_address":
+        if instruction["type"] != "ptr":
+            fail("native-ir rejected code=const-address-type")
+        if not native_ir_constant_exists(module, fields["constant_id"]):
+            fail("native-ir rejected code=constant-not-found;id=" + str(fields["constant_id"]))
+        return
+    if op == "call_external":
+        external = native_ir_external(module, fields["name"])
+        args = fields["args"]
+        if len(args) != len(external["parameters"]):
+            fail("native-ir rejected code=external-arity;name=" + fields["name"])
+        arg_idx = 0
+        while arg_idx < len(args):
+            actual_type = native_ir_value_type_before(prior, len(prior), args[arg_idx])
+            expected_type = external["parameters"][arg_idx]
+            if actual_type != expected_type:
+                fail("native-ir rejected code=external-argument-type;name=" + fields["name"] + ";index=" + str(arg_idx) + ";expected=" + expected_type + ";actual=" + actual_type)
+            arg_idx = arg_idx + 1
+        if instruction["type"] != external["result_type"]:
+            fail("native-ir rejected code=external-result-type;name=" + fields["name"])
+        return
+    if op == "call_internal":
+        called = native_ir_function_by_name(module, fields["name"])
+        args = fields["args"]
+        native_ir_verify_arg_types(prior, args, called["parameters"], op)
+        if instruction["type"] != called["result_type"]:
+            fail("native-ir rejected code=internal-result-type;name=" + fields["name"])
+        return
+    if op == "dispatch_call":
+        table = native_ir_dispatch_table_by_id(module, fields["table_id"])
+        name_type = native_ir_value_type_before(prior, len(prior), fields["name"])
+        if name_type != "ptr":
+            fail("native-ir rejected code=dispatch-name-type")
+        args = fields["args"]
+        if len(args) > len(table["parameter_types"]):
+            fail("native-ir rejected code=dispatch-storage-arity;table=" + str(table["id"]))
+        arg_idx = 0
+        while arg_idx < len(args):
+            actual_type = native_ir_value_type_before(prior, len(prior), args[arg_idx])
+            expected_type = table["parameter_types"][arg_idx]
+            if actual_type != expected_type:
+                fail("native-ir rejected code=dispatch-argument-type;table=" + str(table["id"]) + ";index=" + str(arg_idx))
+            arg_idx = arg_idx + 1
+        actual_arity = fields["actual_arity"]
+        if actual_arity < 0 or actual_arity > len(args):
+            fail("native-ir rejected code=dispatch-actual-arity;table=" + str(table["id"]))
+        if instruction["type"] != table["result_type"]:
+            fail("native-ir rejected code=dispatch-result-type;table=" + str(table["id"]))
+        return
+    if op == "ast_from_static":
+        table = native_ir_static_program_by_id(module, fields["table_id"])
+        if fields["token_count"] != native_static_program_token_count(table):
+            fail("native-ir rejected code=static-program-token-count;id=" + str(table["id"]))
+        if fields["record_count"] != native_static_program_record_count(table):
+            fail("native-ir rejected code=static-program-record-count;id=" + str(table["id"]))
+        if fields["root"] != table["root"]:
+            fail("native-ir rejected code=static-program-root;id=" + str(table["id"]))
+        if instruction["type"] != "ast_handle_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    args = fields["args"]
+    if op == "ast_create":
+        native_ir_verify_arg_types(prior, args, ["i32", "i64", "i64", "i64", "i64", "i64"], op)
+        if instruction["type"] != "ast_handle_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "ast_retain" or op == "ast_release":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "ast_kind":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "ast_field":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "i32"], op)
+        if instruction["type"] != "i64":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "ast_bind_tokens":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "token_vector_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "ast_view":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "usize"], op)
+        if instruction["type"] != "ast_handle_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "ast_append":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "i32", "i64", "i64", "i64", "i64"], op)
+        if instruction["type"] != "usize":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "ast_append_record":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "i32", "i64", "i64", "i64", "i64", "i64", "i64", "i64"], op)
+        if instruction["type"] != "usize":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "expr_eval":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "usize", "environment_ptr", "slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "environment_create":
+        native_ir_verify_arg_types(prior, args, ["usize", "environment_ptr"], op)
+        if instruction["type"] != "environment_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "environment_null":
+        native_ir_verify_arg_types(prior, args, [], op)
+        if instruction["type"] != "environment_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "environment_bind":
+        native_ir_verify_arg_types(prior, args, ["environment_ptr", "ast_handle_ptr", "usize", "slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "environment_lookup":
+        native_ir_verify_arg_types(prior, args, ["environment_ptr", "ast_handle_ptr", "usize", "slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "environment_release":
+        native_ir_verify_arg_types(prior, args, ["environment_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "statement_execute":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "usize", "environment_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "statement_execute_result":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "usize", "environment_ptr", "slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "statement_execute_exception":
+        native_ir_verify_arg_types(prior, args, ["ast_handle_ptr", "usize", "environment_ptr", "slot_ptr", "slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "token_vector_create":
+        native_ir_verify_arg_types(prior, args, ["usize"], op)
+        if instruction["type"] != "token_vector_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "token_vector_append":
+        native_ir_verify_arg_types(prior, args, ["token_vector_ptr", "i32", "ptr", "usize", "usize", "usize"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "token_vector_count":
+        native_ir_verify_arg_types(prior, args, ["token_vector_ptr"], op)
+        if instruction["type"] != "usize":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "token_kind":
+        native_ir_verify_arg_types(prior, args, ["token_vector_ptr", "usize"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "token_text_length":
+        native_ir_verify_arg_types(prior, args, ["token_vector_ptr", "usize"], op)
+        if instruction["type"] != "usize":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "token_vector_release":
+        native_ir_verify_arg_types(prior, args, ["token_vector_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_alloc":
+        native_ir_verify_arg_types(prior, args, [], op)
+        if instruction["type"] != "slot_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_zero":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr"], op)
+        if instruction["type"] != "slot_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_set_int":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr", "i32"], op)
+        if instruction["type"] != "slot_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_copy":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr", "slot_ptr"], op)
+        if instruction["type"] != "slot_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_copy_owned":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr", "slot_ptr"], op)
+        if instruction["type"] != "slot_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_tag":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_string_length":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr"], op)
+        if instruction["type"] != "usize":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_string_byte":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr", "usize"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_truthy":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_get_int":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "add" or op == "sub":
+        native_ir_verify_arg_types(prior, args, [instruction["type"], instruction["type"]], op)
+        if not native_ir_integer_type(instruction["type"]):
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "int_cast":
+        if len(args) != 1:
+            fail("native-ir rejected code=operation-arity;op=" + op)
+        source_type = native_ir_value_type_before(prior, len(prior), args[0])
+        if not native_ir_integer_type(source_type) or not native_ir_integer_type(instruction["type"]):
+            fail("native-ir rejected code=operation-argument-type;op=" + op)
+        return
+    if op == "slot_set_writer":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr", "writer_ptr"], op)
+        if instruction["type"] != "slot_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_get_writer":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr"], op)
+        if instruction["type"] != "writer_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_release":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "slot_write_stderr":
+        native_ir_verify_arg_types(prior, args, ["slot_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "writer_open":
+        native_ir_verify_arg_types(prior, args, ["ptr"], op)
+        if instruction["type"] != "writer_ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "writer_append":
+        native_ir_verify_arg_types(prior, args, ["writer_ptr", "ptr", "usize"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "writer_bytes":
+        native_ir_verify_arg_types(prior, args, ["writer_ptr"], op)
+        if instruction["type"] != "usize":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "writer_close" or op == "writer_release":
+        native_ir_verify_arg_types(prior, args, ["writer_ptr"], op)
+        if instruction["type"] != "i32":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "eq":
+        if len(args) != 2:
+            fail("native-ir rejected code=operation-arity;op=" + op)
+        left_type = native_ir_value_type_before(prior, len(prior), args[0])
+        right_type = native_ir_value_type_before(prior, len(prior), args[1])
+        if left_type != right_type:
+            fail("native-ir rejected code=operation-argument-type;op=" + op)
+        if instruction["type"] != "i1":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    if op == "argv_at":
+        native_ir_verify_arg_types(prior, args, ["ptr", "i32"], op)
+        if instruction["type"] != "ptr":
+            fail("native-ir rejected code=operation-result-type;op=" + op)
+        return
+    fail("native-ir rejected code=unknown-operation;op=" + op)
+
+
+def native_ir_block_exists(function, block_id):
+    idx = 0
+    while idx < len(function["blocks"]):
+        if function["blocks"][idx]["id"] == block_id:
+            return True
+        idx = idx + 1
+    return False
+
+
+def verify_native_ir_block(module, function, block, prior):
+    instructions = block["instructions"]
+    idx = 0
+    while idx < len(instructions):
+        verify_native_ir_instruction(module, function, prior, instructions[idx])
+        prior.append(instructions[idx])
+        idx = idx + 1
+    terminator = block["terminator"]
+    if terminator["op"] == "return":
+        return_type = native_ir_value_type_before(prior, len(prior), terminator["value"])
+        if return_type != function["result_type"]:
+            fail("native-ir rejected code=return-type;function=" + function["name"] + ";expected=" + function["result_type"] + ";actual=" + return_type)
+        return prior
+    if terminator["op"] == "branch":
+        condition_type = native_ir_value_type_before(prior, len(prior), terminator["condition"])
+        if condition_type != "i1":
+            fail("native-ir rejected code=branch-condition-type;function=" + function["name"])
+        if not native_ir_block_exists(function, terminator["true_target"]) or not native_ir_block_exists(function, terminator["false_target"]):
+            fail("native-ir rejected code=branch-target;function=" + function["name"])
+        return prior
+    fail("native-ir rejected code=unsupported-terminator;op=" + terminator["op"])
+
+
+def verify_native_ir(module):
+    if module["contract"] != "tyrion-native-ir-v1":
+        fail("native-ir rejected code=contract-version")
+    if module["target_independent_abi_version"] != 1:
+        fail("native-ir rejected code=abi-version")
+    if len(module["functions"]) == 0:
+        fail("native-ir rejected code=no-functions")
+    if "extensions" in module:
+        extension_idx = 0
+        while extension_idx < len(module["extensions"]):
+            extension = module["extensions"][extension_idx]
+            if extension["id"] != extension_idx:
+                fail("native-ir rejected code=noncanonical-extension-id")
+            if static_extension_identifier_valid(extension["name"]) != True:
+                fail("native-ir rejected code=invalid-extension-name")
+            if static_extension_identifier_valid(extension["call_symbol"]) != True:
+                fail("native-ir rejected code=invalid-extension-symbol")
+            extension_idx = extension_idx + 1
+    global_idx = 0
+    while global_idx < len(module["globals"]):
+        item = module["globals"][global_idx]
+        if item["kind"] != "static_program":
+            fail("native-ir rejected code=unknown-global-kind;index=" + str(global_idx))
+        if item["id"] != global_idx:
+            fail("native-ir rejected code=noncanonical-static-program-id")
+        token_count = native_static_program_token_count(item)
+        record_count = native_static_program_record_count(item)
+        if token_count == 0 or token_count > 1048576:
+            fail("native-ir rejected code=static-program-token-count;id=" + str(item["id"]))
+        if record_count == 0 or record_count > 1048576:
+            fail("native-ir rejected code=static-program-record-count;id=" + str(item["id"]))
+        if item["root"] < 0 or item["root"] >= record_count:
+            fail("native-ir rejected code=static-program-root;id=" + str(item["id"]))
+        token_idx = 0
+        while token_idx < token_count:
+            token = native_static_program_token(item, token_idx)
+            if token["kind"] <= 0 or token["kind"] > len(generated_token_kind_names()):
+                fail("native-ir rejected code=static-token-kind;table=" + str(item["id"]) + ";index=" + str(token_idx))
+            if not ("builder" in item) and not native_ir_constant_exists(module, token_idx):
+                fail("native-ir rejected code=static-token-constant;table=" + str(item["id"]) + ";index=" + str(token_idx))
+            if len(token["text"]) < 0 or token["line"] < 0 or token["column"] < 0:
+                fail("native-ir rejected code=static-token-field;table=" + str(item["id"]) + ";index=" + str(token_idx))
+            token_idx = token_idx + 1
+        record_idx = 0
+        while record_idx < record_count:
+            record = native_static_program_record(item, record_idx)
+            if record["kind"] <= 0:
+                fail("native-ir rejected code=static-record-kind;table=" + str(item["id"]) + ";index=" + str(record_idx))
+            record_idx = record_idx + 1
+        global_idx = global_idx + 1
+    table_idx = 0
+    while table_idx < len(module["dispatch_tables"]):
+        table = module["dispatch_tables"][table_idx]
+        if table["id"] != table_idx:
+            fail("native-ir rejected code=noncanonical-dispatch-table-id")
+        if len(table["parameter_types"]) > 4:
+            fail("native-ir rejected code=dispatch-table-arity-not-supported;id=" + str(table["id"]))
+        entry_idx = 0
+        while entry_idx < len(table["entries"]):
+            entry = table["entries"][entry_idx]
+            if not native_ir_constant_exists(module, entry["constant_id"]):
+                fail("native-ir rejected code=dispatch-name-constant-not-found;id=" + str(entry["constant_id"]))
+            called = native_ir_function_by_name(module, entry["function"])
+            if called["parameters"] != table["parameter_types"]:
+                fail("native-ir rejected code=dispatch-function-parameters;name=" + entry["function"])
+            if called["result_type"] != table["result_type"]:
+                fail("native-ir rejected code=dispatch-function-result;name=" + entry["function"])
+            entry_idx = entry_idx + 1
+        table_idx = table_idx + 1
+    function_idx = 0
+    while function_idx < len(module["functions"]):
+        function = module["functions"][function_idx]
+        if len(function["blocks"]) == 0:
+            fail("native-ir rejected code=no-blocks;function=" + function["name"])
+        if function["entry_block"] != function["blocks"][0]["id"]:
+            fail("native-ir rejected code=entry-block;function=" + function["name"])
+        prior = []
+        block_idx = 0
+        while block_idx < len(function["blocks"]):
+            if function["blocks"][block_idx]["id"] != block_idx:
+                fail("native-ir rejected code=noncanonical-block-id;function=" + function["name"])
+            prior = verify_native_ir_block(module, function, function["blocks"][block_idx], prior)
+            block_idx = block_idx + 1
+        function_idx = function_idx + 1
+    return module

@@ -173,6 +173,19 @@ def static_extension_plan(program, extension_root):
         extensions = method_append(extensions, {"id": len(extensions), "name": name, "call_symbol": call_symbol, "sources": source_paths, "source_count": len(source_paths), "source_path": source_paths[0]})
     return extensions
 
+def static_extension_build_plan(program, extension_mode, extension_root):
+    names = static_extension_statement_names(program["items"], [])
+    if extension_mode == "off":
+        if len(names) > 0:
+            fail("static extensions are disabled")
+        return []
+    if extension_mode != "auto" and extension_mode != "required":
+        fail("invalid --ext-static mode: " + extension_mode)
+    extensions = static_extension_plan(program, extension_root)
+    if extension_mode == "required" and len(extensions) == 0:
+        fail("required static extension was not referenced")
+    return extensions
+
 def static_extension_id(plan, name):
     for extension in plan["extensions"]:
         if extension["name"] == name:

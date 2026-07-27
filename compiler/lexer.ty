@@ -191,8 +191,7 @@ def emit_indent_delta(tokens, indents, indent, line):
     current = indents[current_idx]
     if indent > current:
         indents = method_append(indents, indent)
-        tok = token("INDENT", "INDENT", line, 1)
-        tokens = method_append(tokens, tok)
+        __tyrion_native_token_builder_append(tokens, "INDENT", "INDENT", line, 1)
         return {"tokens": tokens, "indents": indents}
     while indent < current:
         if len(indents) <= 1:
@@ -209,15 +208,14 @@ def emit_indent_delta(tokens, indents, indent, line):
         current_idx = len(indents)
         current_idx = current_idx - 1
         current = indents[current_idx]
-        tok = token("DEDENT", "DEDENT", line, 1)
-        tokens = method_append(tokens, tok)
+        __tyrion_native_token_builder_append(tokens, "DEDENT", "DEDENT", line, 1)
     if indent != current:
         fail("invalid dedent")
     return {"tokens": tokens, "indents": indents}
 
 
 def lex(source):
-    tokens = []
+    tokens = __tyrion_native_ast_builder_create()
     indents = [0]
     i = 0
     n = len(source)
@@ -257,6 +255,9 @@ def lex(source):
             if skip_iteration == 0:
                 scan_ch = source[scan]
                 if scan_ch == "#":
+                    module_source_marker = False
+                    if scan + 16 <= n and source[scan:scan + 16] == "# module-source:":
+                        module_source_marker = True
                     scanning_comment = True
                     while scanning_comment:
                         if scan >= n:
@@ -270,7 +271,10 @@ def lex(source):
                     if scan < n:
                         scan = scan + 1
                     i = scan
-                    line = line + 1
+                    if module_source_marker:
+                        line = 1
+                    else:
+                        line = line + 1
                     column = 1
                     skip_iteration = 1
             if skip_iteration == 0:
@@ -304,10 +308,10 @@ def lex(source):
                     handled_char = 1
             if handled_char == 0:
                 if ch == "\n":
-                    tok = token("NEWLINE", "NEWLINE", line, column)
-                    tokens = method_append(tokens, tok)
+                    newline_line = line + 1
+                    __tyrion_native_token_builder_append(tokens, "NEWLINE", "NEWLINE", newline_line, column)
                     i = i + 1
-                    line = line + 1
+                    line = newline_line
                     column = 1
                     at_line_start = True
                     handled_char = 1
@@ -344,8 +348,7 @@ def lex(source):
                                 scanning_ident = False
                     text = source[start:i]
                     kind = keyword_kind(text)
-                    tok = token(kind, text, line, start_col)
-                    tokens = method_append(tokens, tok)
+                    __tyrion_native_token_builder_append(tokens, kind, text, line, start_col)
                     handled_char = 1
             if handled_char == 0:
                 if ch >= "0" and ch <= "9":
@@ -396,8 +399,7 @@ def lex(source):
                                 else:
                                     scanning_float = False
                     text = source[start:i]
-                    tok = token(kind, text, line, start_col)
-                    tokens = method_append(tokens, tok)
+                    __tyrion_native_token_builder_append(tokens, kind, text, line, start_col)
                     handled_char = 1
             if handled_char == 0:
                 quote_start = False
@@ -435,8 +437,7 @@ def lex(source):
                         i = i + 1
                         column = column + 1
                     text = source[start:i]
-                    tok = token("STRING", text, line, start_col)
-                    tokens = method_append(tokens, tok)
+                    __tyrion_native_token_builder_append(tokens, "STRING", text, line, start_col)
                     handled_char = 1
             if handled_char == 0:
                 simple_kind = simple_token_kind(ch)
@@ -451,22 +452,19 @@ def lex(source):
                             text = source[i:i + 2]
                             i = i + 1
                             column = column + 1
-                    tok = token(kind, text, line, column)
-                    tokens = method_append(tokens, tok)
+                    __tyrion_native_token_builder_append(tokens, kind, text, line, column)
                     i = i + 1
                     column = column + 1
                     handled_char = 1
             if handled_char == 0:
-                tok = token("UNKNOWN", ch, line, column)
-                tokens = method_append(tokens, tok)
+                __tyrion_native_token_builder_append(tokens, "UNKNOWN", ch, line, column)
                 i = i + 1
                 column = column + 1
 
     indent_delta = emit_indent_delta(tokens, indents, 0, line)
     tokens = indent_delta["tokens"]
-    tok = token("EOF", "EOF", line, column)
-    tokens = method_append(tokens, tok)
-    if len(tokens) == 1:
+    __tyrion_native_token_builder_append(tokens, "EOF", "EOF", line, column)
+    if token_count(tokens) == 1:
         fail("lex returned eof only")
     return tokens
 
@@ -484,9 +482,9 @@ def source_inventory(path):
 
 
 def token_inventory(tokens):
-    out = {"token_count": len(tokens), "identifier_count": 0, "keyword_count": 0, "string_count": 0, "int_count": 0, "float_count": 0, "indent_count": 0, "dedent_count": 0, "unknown_count": 0}
+    out = {"token_count": token_count(tokens), "identifier_count": 0, "keyword_count": 0, "string_count": 0, "int_count": 0, "float_count": 0, "indent_count": 0, "dedent_count": 0, "unknown_count": 0}
     idx = 0
-    while idx < len(tokens):
+    while idx < token_count(tokens):
         kind = token_kind_at(tokens, idx)
         if kind == "IDENTIFIER":
             out["identifier_count"] = out["identifier_count"] + 1
@@ -507,4 +505,3 @@ def token_inventory(tokens):
                 out["keyword_count"] = out["keyword_count"] + 1
         idx = idx + 1
     return out
-

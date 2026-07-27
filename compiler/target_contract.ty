@@ -43,7 +43,8 @@ def target_spec(os_name, arch):
     elif os_name == "linux" and arch == "x86_64":
         backend = "linux-x86_64"
         calling_convention = "sysv-amd64"
-        operations = operations + ",runtime-object,compiler-cli-full"
+        capabilities = capabilities + ",terminal"
+        operations = operations + ",runtime-object,compiler-cli-full,native-ir-literal,native-ir-value-writer,native-ir-cli,native-ir-call,native-ir-dispatch,native-ir-ast,native-ir-token,native-ir-statement,native-ir-expression-int,native-ir-environment,native-ir-statement-execution,native-ir-lowered-slot-dispatch"
     elif os_name == "windows" and arch == "aarch64":
         backend = "windows-aarch64"
         entry = "main"
@@ -215,6 +216,7 @@ def backend_primitive_implementation_keys(target):
     common = "len,int,str,range,file_open,wall_time,tcp_connect,tcp_write,tcp_read,tcp_close,"
     common = common + "read_text_file,read_module_graph,write_text_file,run_tool,writer_open,writer_append,"
     common = common + "writer_close,writer_bytes,writer_set_backend,writer_is_x86,"
+    common = common + "ast_builder_create,ast_builder_len,ast_builder_append,ast_builder_finish,ast_builder_get,token_builder_count,token_builder_append,token_builder_field,"
     common = common + "bool,enumerate,zip,sum,min,max,any,all,sorted,"
     common = common + "host_load,host_call,host_unload"
     if target["backend"] == "darwin-aarch64":
@@ -222,7 +224,7 @@ def backend_primitive_implementation_keys(target):
     if target["backend"] == "linux-aarch64":
         return common
     if target["backend"] == "linux-x86_64":
-        return common
+        return common + ",terminal_read_key,ansi_escape"
     return ""
 
 def backend_has_primitive_implementation(target, implementation):

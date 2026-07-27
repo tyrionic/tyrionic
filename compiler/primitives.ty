@@ -11,7 +11,7 @@
 # id|public|symbol|min|max|keywords|args|result|ownership|effects|capability|impl|dispatch
 
 def primitive_schema_count():
-    return 40
+    return 48
 
 def primitive_schema_public_name(index):
     if index < 12:
@@ -98,6 +98,22 @@ def primitive_schema_public_name(index):
             return "__tyrion_native_host_call"
         if index == 27:
             return "__tyrion_native_host_unload"
+        if index == 28:
+            return "__tyrion_native_ast_builder_create"
+        if index == 29:
+            return "__tyrion_native_ast_builder_len"
+        if index == 30:
+            return "__tyrion_native_ast_builder_append"
+        if index == 31:
+            return "__tyrion_native_ast_builder_finish"
+        if index == 32:
+            return "__tyrion_native_ast_builder_get"
+        if index == 33:
+            return "__tyrion_native_token_builder_count"
+        if index == 34:
+            return "__tyrion_native_token_builder_append"
+        if index == 35:
+            return "__tyrion_native_token_builder_field"
         fail("primitive schema public name index out of range")
 
 def primitive_schema_row(index):
@@ -185,6 +201,22 @@ def primitive_schema_row(index):
             return "39|__tyrion_native_host_call|-|3|3|-|handle,string,string|string-or-none|owned|extension|host-extension|host_call|4"
         if index == 27:
             return "40|__tyrion_native_host_unload|-|1|1|-|handle|bool|move|extension|host-extension|host_unload|2"
+        if index == 28:
+            return "41|__tyrion_native_ast_builder_create|-|0|0|-|none|ast-builder|owned|allocation|compiler-ast|ast_builder_create|1"
+        if index == 29:
+            return "42|__tyrion_native_ast_builder_len|-|2|2|-|ast-builder,int|int|borrow|pure|compiler-ast|ast_builder_len|3"
+        if index == 30:
+            return "43|__tyrion_native_ast_builder_append|-|3|3|-|ast-builder,int,value|none|borrow|mutation|compiler-ast|ast_builder_append|4"
+        if index == 31:
+            return "44|__tyrion_native_ast_builder_finish|-|1|1|-|ast-builder|list|owned|allocation|compiler-ast|ast_builder_finish|2"
+        if index == 32:
+            return "45|__tyrion_native_ast_builder_get|-|3|3|-|ast-builder,int,int|value|owned|pure|compiler-ast|ast_builder_get|4"
+        if index == 33:
+            return "46|__tyrion_native_token_builder_count|-|1|1|-|token-stream|int|borrow|pure|compiler-ast|token_builder_count|2"
+        if index == 34:
+            return "47|__tyrion_native_token_builder_append|-|5|5|-|ast-builder,string,string,int,int|none|borrow|mutation|compiler-ast|token_builder_append|6"
+        if index == 35:
+            return "48|__tyrion_native_token_builder_field|-|3|3|-|token-stream,int,string|value|borrow|pure|compiler-ast|token_builder_field|4"
         fail("primitive schema row index out of range")
 
 def primitive_schema_rows():
@@ -295,6 +327,22 @@ def primitive_schema_index_page_1(page_1_name):
         return 38
     if page_1_name == "__tyrion_native_host_unload":
         return 39
+    if page_1_name == "__tyrion_native_ast_builder_create":
+        return 40
+    if page_1_name == "__tyrion_native_ast_builder_len":
+        return 41
+    if page_1_name == "__tyrion_native_ast_builder_append":
+        return 42
+    if page_1_name == "__tyrion_native_ast_builder_finish":
+        return 43
+    if page_1_name == "__tyrion_native_ast_builder_get":
+        return 44
+    if page_1_name == "__tyrion_native_token_builder_count":
+        return 45
+    if page_1_name == "__tyrion_native_token_builder_append":
+        return 46
+    if page_1_name == "__tyrion_native_token_builder_field":
+        return 47
     return -1
 
 def primitive_schema_index(index_name):
@@ -316,7 +364,7 @@ def primitive_schema_id(id_name):
     fields = primitive_schema_find(id_name)
     if len(fields) == 0:
         return -1
-    return fields[0]
+    return int(fields[0])
 
 def primitive_schema_symbol(symbol_name):
     fields = primitive_schema_find(symbol_name)
@@ -342,7 +390,7 @@ def primitive_schema_accepts_arity(arity_name, argc):
     fields = primitive_schema_find(arity_name)
     if len(fields) == 0:
         return False
-    return argc >= fields[3] and argc <= fields[4]
+    return argc >= int(fields[3]) and argc <= int(fields[4])
 
 def primitive_schema_runtime_visible(visibility_name):
     fields = primitive_schema_find(visibility_name)
@@ -365,7 +413,7 @@ def primitive_schema_runtime_operations():
 
 def primitive_schema_lowered_fixed(fixed_name):
     implementation = primitive_schema_impl_key(fixed_name)
-    fixed = ["len", "tcp_connect", "tcp_write", "tcp_read", "tcp_close", "read_text_file", "read_module_graph", "write_text_file", "run_tool", "writer_open", "writer_append", "writer_close", "writer_bytes", "writer_set_backend", "writer_is_x86"]
+    fixed = ["len", "tcp_connect", "tcp_write", "tcp_read", "tcp_close", "read_text_file", "read_module_graph", "write_text_file", "run_tool", "writer_open", "writer_append", "writer_close", "writer_bytes", "writer_set_backend", "writer_is_x86", "ast_builder_create", "ast_builder_len", "ast_builder_append", "ast_builder_finish", "ast_builder_get", "token_builder_count", "token_builder_append", "token_builder_field"]
     idx = 0
     while idx < len(fixed):
         if fixed[idx] == implementation:
@@ -383,7 +431,7 @@ def primitive_schema_dispatch_arg_count(dispatch_name):
     fields = primitive_schema_find(dispatch_name)
     if len(fields) == 0:
         return 0
-    return fields[12]
+    return int(fields[12])
 
 def primitive_schema_lowered_plan_kind(plan_name):
     implementation = primitive_schema_impl_key(plan_name)

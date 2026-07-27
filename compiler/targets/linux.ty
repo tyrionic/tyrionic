@@ -27,24 +27,10 @@ def emit_linux_aarch64_constant_asm(payload, target):
     return out
 
 def emit_linux_x86_64_constant_asm(payload, target):
-    payload_len = len(payload)
-    out = "# tyrionc-bootstrap-asm v0 target=" + target["triple"] + "\n"
-    out = out + "; linux x86_64 constant-output bootstrap path\n"
-    out = asm_section(out, target["text_section"])
-    out = asm_dir(out, ".globl " + target["entry_symbol"])
-    out = asm_label(out, target["entry_symbol"])
-    out = asm_line(out, "mov $1, %rax")
-    out = asm_line(out, "mov $1, %rdi")
-    out = asm_line(out, "lea __tyrion_payload_0(%rip), %rsi")
-    out = asm_line(out, "mov $" + str(payload_len) + ", %rdx")
-    out = asm_line(out, "syscall")
-    out = asm_line(out, "mov $60, %rax")
-    out = asm_line(out, "xor %rdi, %rdi")
-    out = asm_line(out, "syscall")
-    out = asm_section(out, target["rodata_section"])
-    out = asm_label(out, "__tyrion_payload_0")
-    out = out + ".asciz \"" + asm_escape_string(payload) + "\"\n"
-    return out
+    target_validate(target)
+    if target["backend"] != "linux-x86_64":
+        fail("x86-native rejected code=target-mismatch;target=" + target["backend"])
+    return emit_linux_x86_64_native_literal_asm(payload)
 
 def emit_aarch64_write_literal(out, target, label, length):
     if length == 0:
@@ -382,13 +368,4 @@ def emit_linux_aarch64_compiler_cli_asm_into(out, target, usage_text, version_te
     return out
 
 def emit_linux_x86_64_compiler_cli_asm_into(out, target, usage_text, version_text, spec):
-    out = asm_writer_set_backend(out, "linux-x86_64")
-    out = asm_raw(out, "# tyrionc-bootstrap-asm v0 target=" + target["triple"] + "\n")
-    out = asm_raw(out, "# linux x86_64 source-derived compiler cli path\n")
-    out = asm_raw(out, ".section .note.GNU-stack,\"\",@progbits\n")
-    out = asm_raw(out, ".section .bss\n.p2align 4\n__tyrion_vregs:\n.zero 248\n__tyrion_vfregs:\n.zero 256\n")
-    out = asm_raw(out, "__tyrion_vsp:\n.zero 8\n.p2align 4\n__tyrion_vstack:\n.zero 67108864\n__tyrion_vstack_end:\n")
-    plan = collect_compiler_asm_section_plan(target, spec)
-    out = emit_compiler_asm_section_plan(out, plan, target, spec)
-    out = emit_darwin_aarch64_compiler_cli_data_sections(out, target, usage_text, version_text, spec)
-    return out
+    fail("x86-native rejected code=compatibility-compiler-cli-disabled")

@@ -933,8 +933,6 @@ def emit_lowered_function_exec_body(out, target, fn):
     kind = fn["plan_kind"]
     if kind == "native_runtime_linux_aarch64_asm_text_body":
         return emit_exec_fn_runtime_native_linux_aarch64_asm_text(out, target, fn["name"])
-    if kind == "native_runtime_x86_asm_text_body":
-        return emit_exec_fn_runtime_native_x86_asm_text(out, target, fn["name"])
     if kind == "native_string_concat_body":
         return emit_exec_fn_string_concat(out, target, fn["name"])
     if kind == "native_asm_writer_open_body":
@@ -1077,8 +1075,6 @@ def emit_lowered_function_exec_bodies(out, target, functions):
 def emit_lowered_function_fixed_exec_body(out, target, name, plan_kind):
     if plan_kind == "native_runtime_linux_aarch64_asm_text_body":
         return emit_exec_fn_runtime_native_linux_aarch64_asm_text(out, target, name)
-    if plan_kind == "native_runtime_x86_asm_text_body":
-        return emit_exec_fn_runtime_native_x86_asm_text(out, target, name)
     if plan_kind == "native_string_concat_body":
         return emit_exec_fn_string_concat(out, target, name)
     if plan_kind == "native_asm_writer_open_body":

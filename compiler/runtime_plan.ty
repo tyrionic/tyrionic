@@ -544,21 +544,25 @@ def runtime_native_program_literals(program, top_items):
         source_metadata = {"calls": [], "literals": []}
         if source_stmt["kind"] == "function":
             source_metadata = runtime_native_statement_list_metadata(source_stmt["body"], source_metadata)
+            for source_param in source_stmt["params"]:
+                if "has_default" in source_param and source_param["has_default"]:
+                    source_metadata = runtime_native_expr_metadata(source_param["default"], source_metadata)
         elif source_stmt["kind"] == "class":
             for source_member in source_stmt["body"]:
                 if source_member["kind"] == "function":
                     source_metadata = runtime_native_statement_list_metadata(source_member["body"], source_metadata)
+                    for source_param in source_member["params"]:
+                        if "has_default" in source_param and source_param["has_default"]:
+                            source_metadata = runtime_native_expr_metadata(source_param["default"], source_metadata)
         elif source_stmt["kind"] == "assign" and source_stmt["value"]["kind"] == "lambda":
             source_metadata = runtime_native_expr_metadata(source_stmt["value"], source_metadata)
         for source_literal in source_metadata["literals"]:
             literals = runtime_native_append_literal(literals, source_literal["kind"], source_literal["value"])
     return literals
 
-def collect_runtime_native_program_plan(program, target):
+def collect_runtime_native_program_plan_with_extensions(program, target, extensions):
     function_names = runtime_native_function_names(program)
-    application = analyze_application_program(program, function_names)
-    if not application["ok"]:
-        fail("runtime-native application analysis rejected code=" + application["code"] + ";kind=" + application_analysis_kind(application["code"], application["detail"]) + ";position=" + application["path"] + ";detail=" + application["detail"])
+    application = require_application_analysis(program, function_names)
     operations = application["runtime_operations"]
     top_items = runtime_native_top_level_items(program)
     top_locals = runtime_native_collect_statement_names(top_items, [])
@@ -589,7 +593,7 @@ def collect_runtime_native_program_plan(program, target):
     plan["functions"] = function_plans
     plan["classes"] = class_plans
     plan["class_count"] = len(class_plans)
-    plan["extensions"] = static_extension_plan(program, "./extensions")
+    plan["extensions"] = extensions
     plan["extension_count"] = len(plan["extensions"])
     plan["literals"] = literals
     plan["literal_count"] = len(literals)
@@ -597,6 +601,9 @@ def collect_runtime_native_program_plan(program, target):
     plan["tag_offset"] = 127
     plan["plan_version"] = "runtime-native-program-v3"
     return plan
+
+def collect_runtime_native_program_plan(program, target):
+    return collect_runtime_native_program_plan_with_extensions(program, target, static_extension_plan(program, "./extensions"))
 
 def runtime_native_program_plan_from_source(source):
     tokens = lex(source)
@@ -607,9 +614,7 @@ def runtime_native_program_summary_plan(source, target):
     tokens = lex(source)
     program = parse_program(tokens)
     function_names = runtime_native_function_names(program)
-    application = analyze_application_program(program, function_names)
-    if not application["ok"]:
-        fail("runtime-native application analysis rejected code=" + application["code"] + ";kind=" + application_analysis_kind(application["code"], application["detail"]) + ";position=" + application["path"] + ";detail=" + application["detail"])
+    application = require_application_analysis(program, function_names)
     top_items = runtime_native_top_level_items(program)
     literals = runtime_native_program_literals(program, top_items)
     plan = {}
@@ -860,19 +865,21 @@ def build_runtime_native_direct_program(program, plan, input_path, output_path):
     write_text_file(artifact_path, artifact)
     return True
 
-def build_runtime_native_direct_program_if_supported(raw_source, input_path, output_path):
+def build_runtime_native_direct_program_if_supported_configured(raw_source, input_path, output_path, extension_mode, extension_root):
     target = host_target()
     if not backend_has_operation(target, "runtime-object"):
         return False
     parsed = parse_source(raw_source, target)
     analysis = analyze_program(parsed)
     program = analysis["program"]
-    application = analyze_application_program(program, runtime_native_function_names(program))
-    if not application["ok"]:
-        fail("direct-native analysis rejected code=" + application["code"] + ";kind=" + application_analysis_kind(application["code"], application["detail"]) + ";position=" + application["path"] + ";detail=" + application["detail"])
-    plan_record = plan_runtime(analysis)
+    require_application_analysis(program, runtime_native_function_names(program))
+    extensions = static_extension_build_plan(program, extension_mode, extension_root)
+    plan_record = plan_runtime_with_extensions(analysis, extensions)
     plan = plan_record["runtime"]
     return build_runtime_native_direct_program(program, plan, input_path, output_path)
+
+def build_runtime_native_direct_program_if_supported(raw_source, input_path, output_path):
+    return build_runtime_native_direct_program_if_supported_configured(raw_source, input_path, output_path, "auto", "./extensions")
 
 def print_arg_runtime_file_part(expr, data_var, strings):
     if expr["kind"] == "var" and expr["value"] == data_var:

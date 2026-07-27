@@ -7,15 +7,15 @@
 
 def usage():
     print("Usage:")
-    print("  tyrionc --help")
-    print("  tyrionc --version")
-    print("  tyrionc --scan <input.ty>")
-    print("  tyrionc --tokens <input.ty>")
-    print("  tyrionc --token-summary <input.ty>")
-    print("  tyrionc --parse-summary <input.ty>")
-    print("  tyrionc --build <input.ty> --out <output>")
-    print("  tyrionc --build <input.ty> --out <output> --ext-static=<off|auto|required>")
-    print("  tyrionc --build <input.ty> --out <output> --ext-dir <path>")
+    print("  tyrionic --help")
+    print("  tyrionic --version")
+    print("  tyrionic --scan <input.ty>")
+    print("  tyrionic --tokens <input.ty>")
+    print("  tyrionic --token-summary <input.ty>")
+    print("  tyrionic --parse-summary <input.ty>")
+    print("  tyrionic --build <input.ty> --out <output>")
+    print("  tyrionic --build <input.ty> --out <output> --ext-static=<off|auto|required>")
+    print("  tyrionic --build <input.ty> --out <output> --ext-dir <path>")
 
 def version():
     print("tyrionic compiler v0")

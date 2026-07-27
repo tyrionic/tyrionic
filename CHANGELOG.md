@@ -29,6 +29,7 @@ Changed:
   function dispatch, and capability-driven runtime component selection.
 - Linux x86-64 terminal input now exposes normalized key events including
   UTF-8 text, raw sequences, function keys, arrows, and modifier state.
+- CLI help now consistently identifies the compiler executable as `tyrionic`.
 
 Fixed:
 

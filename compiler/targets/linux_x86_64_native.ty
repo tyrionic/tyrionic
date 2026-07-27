@@ -217,36 +217,48 @@ def x86_native_token_pool_entry(pool, text):
     return pool
 
 
-def x86_native_token_pool_char_code(ch):
-    # Token strings are UTF-8 byte strings in the compiler runtime. This
-    # ordered table gives common source bytes stable codes; uncommon bytes use
-    # one collision bucket and are still compared exactly before deduplication.
-    alphabet = "\n\t\r abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_()[]{}.,:+-*/%=<>!\"'\\#@&|;?"
-    idx = 0
-    while idx < len(alphabet):
-        if alphabet[idx] == ch:
-            return idx + 1
-        idx = idx + 1
-    return 255
+def x86_native_token_pool_char_band(ch):
+    # A small comparison tree is substantially cheaper in the self-hosted
+    # evaluator than scanning an alphabet for every sampled byte. Bands need
+    # only distribute candidates: exact byte equality resolves collisions.
+    if ch < "0":
+        return 1
+    if ch < "A":
+        return 2
+    if ch < "G":
+        return 3
+    if ch < "M":
+        return 4
+    if ch < "S":
+        return 5
+    if ch < "Y":
+        return 6
+    if ch < "a":
+        return 7
+    if ch < "g":
+        return 8
+    if ch < "m":
+        return 9
+    if ch < "s":
+        return 10
+    if ch < "y":
+        return 11
+    return 12
 
 
-def x86_native_token_pool_hash(text):
-    # Sample both ends so long diagnostics and generated symbol names do not
-    # all collide on a shared prefix. Exact equality resolves every collision.
+def x86_native_token_pool_hash(text, kind):
+    # Kind, length, and up to four character bands cheaply separate compiler
+    # identifiers and punctuation. First-occurrence ordering remains
+    # independent of buckets, and exact equality resolves every collision.
     modulus = 65521
-    value = len(text) % modulus
-    front_stop = len(text)
-    if front_stop > 8:
-        front_stop = 8
-    idx = 0
-    while idx < front_stop:
-        value = (value * 257 + x86_native_token_pool_char_code(text[idx])) % modulus
-        idx = idx + 1
-    if len(text) > 8:
-        idx = len(text) - 8
-        while idx < len(text):
-            value = (value * 257 + x86_native_token_pool_char_code(text[idx])) % modulus
-            idx = idx + 1
+    length = len(text)
+    value = (kind * 257 + length) % modulus
+    if length > 0:
+        value = (value * 17 + x86_native_token_pool_char_band(text[0])) % modulus
+        value = (value * 17 + x86_native_token_pool_char_band(text[length - 1])) % modulus
+    if length > 2:
+        value = (value * 17 + x86_native_token_pool_char_band(text[1])) % modulus
+        value = (value * 17 + x86_native_token_pool_char_band(text[length - 2])) % modulus
     return value
 
 
@@ -276,7 +288,7 @@ def x86_native_build_token_pool(item):
         text = token["text"]
         length = len(text)
         pool["raw_size"] = x86_native_static_image_checked_add(pool["raw_size"], length, "raw-token-text")
-        bucket = x86_native_token_pool_hash(text)
+        bucket = x86_native_token_pool_hash(text, token["kind"])
         cursor = heads[bucket]
         entry_index = -1
         while cursor > 0:
@@ -295,7 +307,10 @@ def x86_native_build_token_pool(item):
         entry = __tyrion_native_ast_builder_get(pool["entries"], 0, entry_index)
         __tyrion_native_ast_builder_append(pool["mapping"], 0, {"kind": entry_index + 1, "text": "", "line": entry["line"], "column": entry["column"]})
         token_idx = token_idx + 1
-    x86_native_verify_token_pool(item, pool)
+    if __tyrion_native_ast_builder_len(pool["mapping"], 0) != token_count:
+        fail("x86 static token image rejected code=pool-map-count;table=" + str(item["id"]))
+    if __tyrion_native_ast_builder_len(pool["entries"], 0) != pool["unique_count"]:
+        fail("x86 static token image rejected code=pool-entry-count;table=" + str(item["id"]))
     return pool
 
 

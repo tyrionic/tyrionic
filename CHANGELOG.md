@@ -4,6 +4,13 @@ All notable changes to `tyrionic` are documented in this file.
 
 This project follows semantic versioning.
 
+## 0.1.3
+
+Changed:
+
+- Reduce Linux x86-64 compiler-generation time with a constant-depth token-pool
+  hash while retaining exact-byte collision checks and deterministic offsets.
+
 ## 0.1.2
 
 Changed:

@@ -4,6 +4,18 @@ All notable changes to `tyrionic` are documented in this file.
 
 This project follows semantic versioning.
 
+## 0.1.4
+
+Added:
+
+- Add a verified Linux x86-64 Native IR v2 direct-lowering path for scalar
+  programs while retaining the established Native IR v1 production route.
+
+Fixed:
+
+- Publish long Darwin text-builder results with the canonical owned heap-string
+  ABI, preserving output-path and `.tyn` metadata writes beyond inline storage.
+
 ## 0.1.3
 
 Changed:

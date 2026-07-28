@@ -2844,3 +2844,178 @@ def native_ir_aggregate_expression_probe_module():
     constants.append({"id": 10, "kind": "string", "value": "int"})
     constants.append({"id": 11, "kind": "string", "value": "float"})
     return {"contract": "tyrion-native-ir-v1", "target_independent_abi_version": 1, "functions": [function], "globals": [], "constants": constants, "externals": [], "dispatch_tables": [], "capabilities": ["core", "token-records", "ast-handles", "value-slots", "lexical-environments", "expression-eval"], "ownership_manifest": "aggregate-deep-copy-index"}
+
+
+# Native IR v2 is the direct source-lowering contract. V1 remains the
+# static-AST bridge and focused runtime-probe contract during migration.
+
+def native_ir_v2_instruction(result, op, value_type, fields):
+    return {"result": result, "op": op, "type": value_type, "fields": fields}
+
+
+def native_ir_v2_const_int(result, value, value_type):
+    return native_ir_v2_instruction(result, "const_int", value_type, {"value": value})
+
+
+def native_ir_v2_const_address(result, constant_id):
+    return native_ir_v2_instruction(result, "const_address", "ptr", {"constant_id": constant_id})
+
+
+def native_ir_v2_call_external(result, name, args, result_type):
+    return native_ir_v2_instruction(result, "call_external", result_type, {"name": name, "args": args})
+
+
+def native_ir_v2_binary(result, op, value_type, left, right):
+    return native_ir_v2_instruction(result, op, value_type, {"args": [left, right]})
+
+
+def native_ir_v2_return(value):
+    return {"op": "return", "value": value}
+
+
+def native_ir_v2_jump(target):
+    return {"op": "jump", "target": target}
+
+
+def native_ir_v2_branch(condition, true_target, false_target):
+    return {"op": "branch", "condition": condition, "true_target": true_target, "false_target": false_target}
+
+
+def native_ir_v2_unreachable():
+    return {"op": "unreachable"}
+
+
+def native_ir_v2_block(block_id, instructions, terminator):
+    return {"id": block_id, "instructions": instructions, "terminator": terminator}
+
+
+def native_ir_v2_function(function_id, name, visibility, parameters, result_type, frame, blocks):
+    return {"id": function_id, "name": name, "visibility": visibility, "parameters": parameters, "result_type": result_type, "entry_block": 0, "frame": frame, "blocks": blocks, "effects": [], "ownership": "scalar-only"}
+
+
+def native_ir_v2_frame(local_slots, control_slots, temporary_slots, scalar_spills):
+    return {"local_slots": local_slots, "control_slots": control_slots, "temporary_slots": temporary_slots, "scalar_spills": scalar_spills}
+
+
+def native_ir_v2_constant(constant_id, kind, value):
+    return {"id": constant_id, "kind": kind, "value": value, "length": len(value)}
+
+
+def native_ir_v2_module(functions, constants, externals, components, production_direct):
+    return {"contract": "tyrion-native-ir-v2", "target_independent_abi_version": 2, "production_direct": production_direct, "functions": functions, "globals": [], "constants": constants, "externals": externals, "components": components, "extensions": [], "ownership_manifest": "direct-scalar"}
+
+
+def native_ir_v2_cfg_probe_module():
+    entry = []
+    entry.append(native_ir_v2_const_int(0, 7, "i64"))
+    entry.append(native_ir_v2_const_int(1, 7, "i64"))
+    entry.append(native_ir_v2_binary(2, "eq", "i1", 0, 1))
+    true_instructions = []
+    true_instructions.append(native_ir_v2_const_int(3, 42, "i32"))
+    false_instructions = []
+    false_instructions.append(native_ir_v2_const_int(4, 1, "i32"))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, entry, native_ir_v2_branch(2, 1, 2)))
+    blocks.append(native_ir_v2_block(1, true_instructions, native_ir_v2_return(3)))
+    blocks.append(native_ir_v2_block(2, false_instructions, native_ir_v2_return(4)))
+    function = native_ir_v2_function(0, "main", "public", [], "i32", native_ir_v2_frame(0, 0, 0, 5), blocks)
+    functions = []
+    functions.append(function)
+    components = []
+    components.append("scalar-core")
+    return native_ir_v2_module(functions, [], [], components, False)
+
+
+def native_ir_v2_cfg_probe_summary():
+    module = verify_native_ir(native_ir_v2_cfg_probe_module())
+    function = module["functions"][0]
+    return module["contract"] + ":functions=" + str(len(module["functions"])) + ":blocks=" + str(len(function["blocks"])) + ":spills=" + str(function["frame"]["scalar_spills"])
+
+
+def native_ir_v2_probe_module(blocks, scalar_spills):
+    frame = native_ir_v2_frame(0, 0, 0, scalar_spills)
+    function = native_ir_v2_function(0, "main", "public", [], "i32", frame, blocks)
+    functions = []
+    functions.append(function)
+    components = []
+    components.append("scalar-core")
+    return native_ir_v2_module(functions, [], [], components, True)
+
+
+def native_ir_v2_use_before_definition_probe():
+    instructions = []
+    instructions.append(native_ir_v2_binary(0, "add", "i32", 1, 2))
+    instructions.append(native_ir_v2_const_int(1, 20, "i32"))
+    instructions.append(native_ir_v2_const_int(2, 22, "i32"))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(0)))
+    return verify_native_ir(native_ir_v2_probe_module(blocks, 3))
+
+
+def native_ir_v2_non_dominating_value_probe():
+    entry = []
+    entry.append(native_ir_v2_const_int(0, 1, "i1"))
+    left = []
+    left.append(native_ir_v2_const_int(1, 40, "i32"))
+    right = []
+    right.append(native_ir_v2_const_int(2, 2, "i32"))
+    merge = []
+    merge.append(native_ir_v2_binary(3, "add", "i32", 1, 2))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, entry, native_ir_v2_branch(0, 1, 2)))
+    blocks.append(native_ir_v2_block(1, left, native_ir_v2_jump(3)))
+    blocks.append(native_ir_v2_block(2, right, native_ir_v2_jump(3)))
+    blocks.append(native_ir_v2_block(3, merge, native_ir_v2_return(3)))
+    return verify_native_ir(native_ir_v2_probe_module(blocks, 4))
+
+
+def native_ir_v2_invalid_jump_probe():
+    instructions = []
+    instructions.append(native_ir_v2_const_int(0, 0, "i32"))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_jump(9)))
+    return verify_native_ir(native_ir_v2_probe_module(blocks, 1))
+
+
+def native_ir_v2_evaluator_operation_probe():
+    instructions = []
+    instructions.append(native_ir_v2_instruction(0, "expr_eval", "i32", {"args": []}))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(0)))
+    return verify_native_ir(native_ir_v2_probe_module(blocks, 1))
+
+
+def native_ir_v2_missing_component_probe():
+    instructions = []
+    instructions.append(native_ir_v2_const_int(0, 7, "i32"))
+    instructions.append(native_ir_v2_instruction(1, "print_int", "i32", {"args": [0]}))
+    instructions.append(native_ir_v2_const_int(2, 0, "i32"))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(2)))
+    module = native_ir_v2_probe_module(blocks, 3)
+    function = module["functions"][0]
+    effects = []
+    effects.append("io")
+    function["effects"] = effects
+    functions = []
+    functions.append(function)
+    module["functions"] = functions
+    return verify_native_ir(module)
+
+
+def native_ir_v2_frame_slot_count_probe():
+    instructions = []
+    instructions.append(native_ir_v2_instruction(0, "slot_alloc", "slot_ptr", {"args": []}))
+    instructions.append(native_ir_v2_const_int(1, 0, "i32"))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(1)))
+    return verify_native_ir(native_ir_v2_probe_module(blocks, 2))
+
+
+def native_ir_v2_frame_overflow_probe():
+    instructions = []
+    instructions.append(native_ir_v2_const_int(0, 0, "i32"))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(0)))
+    module = native_ir_v2_probe_module(blocks, 268435456)
+    return verify_native_ir(module)

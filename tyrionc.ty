@@ -14,6 +14,7 @@ import compiler.lexer
 import compiler.frontend
 import compiler.native_ir_source
 import compiler.application_semantics
+import compiler.native_ir_lowering
 import compiler.writer
 import compiler.lowering
 import compiler.evaluation

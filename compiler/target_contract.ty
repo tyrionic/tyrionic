@@ -44,7 +44,7 @@ def target_spec(os_name, arch):
         backend = "linux-x86_64"
         calling_convention = "sysv-amd64"
         capabilities = capabilities + ",terminal"
-        operations = operations + ",runtime-object,compiler-cli-full,native-ir-literal,native-ir-value-writer,native-ir-cli,native-ir-call,native-ir-dispatch,native-ir-ast,native-ir-token,native-ir-statement,native-ir-expression-int,native-ir-environment,native-ir-statement-execution,native-ir-lowered-slot-dispatch"
+        operations = operations + ",runtime-object,compiler-cli-full,native-ir-literal,native-ir-value-writer,native-ir-cli,native-ir-call,native-ir-dispatch,native-ir-ast,native-ir-token,native-ir-statement,native-ir-expression-int,native-ir-environment,native-ir-statement-execution,native-ir-lowered-slot-dispatch,native-ir-v2-direct"
     elif os_name == "windows" and arch == "aarch64":
         backend = "windows-aarch64"
         entry = "main"

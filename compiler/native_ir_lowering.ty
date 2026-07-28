@@ -1,0 +1,251 @@
+# Tyrionic Compiler
+# (c) 2026 Dennis Vink — https://drvink.com/
+# Project: https://github.com/tyrionic/
+# SPDX-License-Identifier: MIT
+#
+# Target-neutral direct Native IR lowering. This module is deliberately
+# separate from native_ir_source.ty: the latter remains the explicit v1
+# static-program oracle until the direct route passes the migration gates.
+
+def native_direct_function_names(program):
+    names = []
+    idx = 0
+    while idx < len(program["items"]):
+        statement = program["items"][idx]
+        if statement["kind"] == "function":
+            names = method_append(names, statement["name"])
+        elif statement["kind"] == "class":
+            names = method_append(names, statement["name"])
+            member_idx = 0
+            while member_idx < len(statement["body"]):
+                member = statement["body"][member_idx]
+                if member["kind"] == "function":
+                    names = method_append(names, "@method:" + member["name"])
+                member_idx = member_idx + 1
+        elif statement["kind"] == "assign" and statement["target"]["kind"] == "var" and statement["value"]["kind"] == "lambda":
+            names = method_append(names, statement["target"]["value"])
+        idx = idx + 1
+    return names
+
+
+def native_direct_analyze(program, target):
+    target = backend_require_operation(target, "native-ir-v2-direct")
+    application = require_application_analysis(program, native_direct_function_names(program))
+    return {"contract": "tyrion-native-direct-analysis-v1", "target": target, "program": program, "application": application}
+
+
+def native_direct_collect_locals(program):
+    locals = []
+    idx = 0
+    while idx < len(program["items"]):
+        statement = program["items"][idx]
+        if statement["kind"] == "assign" and statement["target"]["kind"] == "var":
+            name = statement["target"]["value"]
+            found = False
+            local_idx = 0
+            while local_idx < len(locals):
+                if locals[local_idx]["name"] == name:
+                    found = True
+                local_idx = local_idx + 1
+            if not found:
+                locals = method_append(locals, {"id": len(locals), "name": name, "kind": "value_slot"})
+        idx = idx + 1
+    return locals
+
+
+def native_direct_plan(program, application, target):
+    target = backend_require_operation(target, "native-ir-v2-direct")
+    if application["contract"] != "tyrion-native-direct-analysis-v1":
+        fail("direct-native lowering rejected code=analysis-contract")
+    if application["program"] != program:
+        fail("direct-native lowering rejected code=analysis-program-mismatch")
+    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "application": application["application"], "extensions": [], "locals": native_direct_collect_locals(program)}
+
+
+def native_direct_constant_id(state, kind, value):
+    idx = 0
+    while idx < len(state["constants"]):
+        constant = state["constants"][idx]
+        if constant["kind"] == kind and constant["value"] == value:
+            return {"state": state, "id": constant["id"]}
+        idx = idx + 1
+    constant_id = len(state["constants"])
+    state["constants"] = method_append(state["constants"], native_ir_v2_constant(constant_id, kind, value))
+    return {"state": state, "id": constant_id}
+
+
+def native_direct_append_instruction(state, op, value_type, fields):
+    result = state["next_result"]
+    state["next_result"] = result + 1
+    state["instructions"] = method_append(state["instructions"], native_ir_v2_instruction(result, op, value_type, fields))
+    return {"state": state, "result": result}
+
+
+def native_direct_append_const_int(state, value, value_type):
+    return native_direct_append_instruction(state, "const_int", value_type, {"value": value})
+
+
+def native_direct_append_write(state, payload):
+    if len(payload) == 0:
+        return state
+    constant = native_direct_constant_id(state, "bytes", payload)
+    state = constant["state"]
+    fd = native_direct_append_const_int(state, 1, "i32")
+    state = fd["state"]
+    address = native_direct_append_instruction(state, "const_address", "ptr", {"constant_id": constant["id"]})
+    state = address["state"]
+    length = native_direct_append_const_int(state, len(payload), "usize")
+    state = length["state"]
+    call = native_direct_append_instruction(state, "call_external", "isize", {"name": "write", "args": [fd["result"], address["result"], length["result"]]})
+    return call["state"]
+
+
+def native_direct_literal_text(expr):
+    kind = expr["kind"]
+    if kind == "string":
+        return {"ok": True, "value": expr["value"]}
+    if kind == "int":
+        return {"ok": True, "value": str(expr["value"])}
+    if kind == "bool":
+        if expr["value"]:
+            return {"ok": True, "value": "True"}
+        return {"ok": True, "value": "False"}
+    if kind == "none":
+        return {"ok": True, "value": "none"}
+    return {"ok": False, "value": ""}
+
+
+def native_direct_local_slot(state, name):
+    idx = 0
+    while idx < len(state["locals"]):
+        if state["locals"][idx]["name"] == name:
+            return state["locals"][idx]["slot"]
+        idx = idx + 1
+    fail("direct-native lowering rejected code=unresolved-local;name=" + name)
+
+
+def native_direct_lower_int_expression(state, expression, path):
+    kind = expression["kind"]
+    if kind == "int":
+        value = native_direct_append_const_int(state, expression["value"], "i32")
+        return {"state": value["state"], "result": value["result"], "type": "i32"}
+    if kind == "var":
+        slot = native_direct_local_slot(state, expression["value"])
+        value = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [slot]})
+        return {"state": value["state"], "result": value["result"], "type": "i32"}
+    if kind == "binary" and (expression["op"] == "+" or expression["op"] == "-"):
+        left = native_direct_lower_int_expression(state, expression["left"], path + ".left")
+        right = native_direct_lower_int_expression(left["state"], expression["right"], path + ".right")
+        operation = "add"
+        if expression["op"] == "-":
+            operation = "sub"
+        value = native_direct_append_instruction(right["state"], operation, "i32", {"args": [left["result"], right["result"]]})
+        return {"state": value["state"], "result": value["result"], "type": "i32"}
+    fail("direct-native lowering rejected code=expression-not-lowered;kind=" + kind + ";position=" + path)
+
+
+def native_direct_lower_print_statement(state, statement, path):
+    if statement["kind"] != "expr":
+        fail("direct-native lowering rejected code=statement-not-lowered;kind=" + statement["kind"] + ";position=" + path)
+    expression = statement["value"]
+    if expression["kind"] != "call" or expression["callee"]["kind"] != "var" or expression["callee"]["value"] != "print":
+        fail("direct-native lowering rejected code=statement-not-lowered;kind=" + expression["kind"] + ";position=" + path)
+    arg_idx = 0
+    while arg_idx < len(expression["args"]):
+        literal = native_direct_literal_text(expression["args"][arg_idx])
+        if arg_idx > 0:
+            state = native_direct_append_write(state, " ")
+        if literal["ok"]:
+            state = native_direct_append_write(state, literal["value"])
+        else:
+            value = native_direct_lower_int_expression(state, expression["args"][arg_idx], path + ".arg[" + str(arg_idx) + "]")
+            printed = native_direct_append_instruction(value["state"], "print_int", "i32", {"args": [value["result"]]})
+            state = printed["state"]
+        arg_idx = arg_idx + 1
+    return native_direct_append_write(state, "\n")
+
+
+def native_direct_lower_statement(state, statement, path):
+    if statement["kind"] == "assign" and statement["target"]["kind"] == "var":
+        value = native_direct_lower_int_expression(state, statement["value"], path + ".value")
+        slot = native_direct_local_slot(value["state"], statement["target"]["value"])
+        stored = native_direct_append_instruction(value["state"], "slot_set_int", "slot_ptr", {"args": [slot, value["result"]]})
+        return stored["state"]
+    return native_direct_lower_print_statement(state, statement, path)
+
+
+def native_direct_module_from_plan(plan):
+    if plan["contract"] != "tyrion-native-direct-plan-v1":
+        fail("direct-native lowering rejected code=plan-contract")
+    state = {"instructions": [], "constants": [], "next_result": 0, "locals": []}
+    local_idx = 0
+    while local_idx < len(plan["locals"]):
+        allocated = native_direct_append_instruction(state, "slot_alloc", "slot_ptr", {"args": []})
+        state = allocated["state"]
+        zeroed = native_direct_append_instruction(state, "slot_zero", "slot_ptr", {"args": [allocated["result"]]})
+        state = zeroed["state"]
+        state["locals"] = method_append(state["locals"], {"name": plan["locals"][local_idx]["name"], "slot": zeroed["result"]})
+        local_idx = local_idx + 1
+    items = plan["program"]["items"]
+    idx = 0
+    while idx < len(items):
+        state = native_direct_lower_statement(state, items[idx], "program[" + str(idx) + "]")
+        idx = idx + 1
+    exit_value = native_direct_append_const_int(state, 0, "i32")
+    state = exit_value["state"]
+    block = native_ir_v2_block(0, state["instructions"], native_ir_v2_return(exit_value["result"]))
+    blocks = []
+    blocks.append(block)
+    frame = native_ir_v2_frame(len(plan["locals"]), 0, 0, state["next_result"])
+    function = native_ir_v2_function(0, "main", "public", [], "i32", frame, blocks)
+    function["effects"] = ["io"]
+    functions = []
+    functions.append(function)
+    externals = []
+    externals.append({"name": "write", "parameters": ["i32", "ptr", "usize"], "result_type": "isize", "effect": "io"})
+    components = []
+    components.append("scalar-core")
+    components.append("print")
+    return native_ir_v2_module(functions, state["constants"], externals, components, True)
+
+
+def native_direct_module_from_program(program, target, extensions):
+    if len(extensions) != 0:
+        fail("direct-native lowering rejected code=extensions-not-lowered")
+    application = native_direct_analyze(program, target)
+    plan = native_direct_plan(program, application, target)
+    plan["extensions"] = extensions
+    return verify_native_ir(native_direct_module_from_plan(plan))
+
+
+def native_direct_path_module(path, target, extensions):
+    source = read_module_graph(path)
+    program = parse_program(lex(source))
+    return native_direct_module_from_program(program, target, extensions)
+
+
+def native_direct_source_module(source, target):
+    program = parse_program(lex(source))
+    return native_direct_module_from_program(program, target, [])
+
+
+def native_direct_source_summary(source):
+    module = native_direct_source_module(source, target_spec("linux", "x86_64"))
+    function = module["functions"][0]
+    return module["contract"] + ":functions=" + str(len(module["functions"])) + ":blocks=" + str(len(function["blocks"])) + ":constants=" + str(len(module["constants"])) + ":instructions=" + str(len(function["blocks"][0]["instructions"]))
+
+
+def native_direct_plan_summary(source):
+    target = target_spec("linux", "x86_64")
+    program = parse_program(lex(source))
+    analysis = native_direct_analyze(program, target)
+    plan = native_direct_plan(program, analysis, target)
+    local_names = ""
+    idx = 0
+    while idx < len(plan["locals"]):
+        if idx > 0:
+            local_names = local_names + ","
+        local_names = local_names + plan["locals"][idx]["name"]
+        idx = idx + 1
+    application = plan["application"]
+    return plan["contract"] + ":locals=" + local_names + ":operations=" + str(len(application["operations"])) + ":value-kinds=" + str(len(application["value_kinds"])) + ":calls=" + str(len(application["call_kinds"])) + ":components=" + str(len(application["components"]))

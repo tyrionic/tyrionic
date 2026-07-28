@@ -2717,6 +2717,7 @@ def emit_native_ast_field_access_runtime(out, target):
 
 def emit_native_text_builder_runtime(out, target):
     value_tag_x20 = generated_value_tag_mem("x20")
+    value_owner_x20 = generated_value_owner_mem("x20")
 
     # Builder layout: data pointer, byte length, byte capacity. It grows on the
     # heap and is consumed into a canonical generated string slot on success.
@@ -2879,8 +2880,10 @@ def emit_native_text_builder_runtime(out, target):
     out = asm_line(out, "ldr x10, [x19]")
     out = asm_line(out, "str x10, [x20]")
     out = asm_line(out, "str x9, [x20, #8]")
-    out = asm_line(out, "mov w10, #9")
+    out = asm_line(out, "mov w10, #" + str(generated_value_tag_string_heap()))
     out = asm_line(out, "strb w10, " + value_tag_x20)
+    out = asm_line(out, "mov w10, #1")
+    out = asm_line(out, "strb w10, " + value_owner_x20)
     out = asm_line(out, "str xzr, [x19]")
     out = asm_label(out, "L_native_text_builder_finish_ok")
     out = asm_line(out, "mov w0, #1")

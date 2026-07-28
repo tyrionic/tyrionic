@@ -639,6 +639,10 @@ def x86_native_emit_instruction(out, instruction, instructions, index):
         out = x86_native_line(out, "movl $1, %r10d")
         out = asm_writer_append(out, ".L_native_ir_slot_type_done_" + str(result) + ":\n")
         return x86_native_line(out, "movq %r10, " + result_slot)
+    if op == "print_int":
+        out = x86_native_line(out, "movl " + x86_native_stack_operand(args[0]) + ", %edi")
+        out = x86_native_line(out, "call __tyrion_direct_print_int")
+        return x86_native_line(out, "movq %rax, " + result_slot)
     if op == "add" or op == "sub":
         out = x86_native_line(out, "movq " + x86_native_stack_operand(args[0]) + ", %rax")
         if op == "add":
@@ -15898,8 +15902,105 @@ def x86_native_emit_writer_runtime(out):
     return out
 
 
+def x86_native_emit_v2_function(out, function):
+    instructions = x86_native_function_instructions(function)
+    if function["visibility"] == "public":
+        out = asm_writer_append(out, ".globl " + function["name"] + "\n")
+    out = asm_writer_append(out, function["name"] + ":\n")
+    if function["name"] == "main":
+        out = x86_native_line(out, "movq %rdi, __tyrion_native_process_argc(%rip)")
+        out = x86_native_line(out, "movq %rsi, __tyrion_native_process_argv(%rip)")
+    out = x86_native_line(out, "pushq %rbp")
+    out = x86_native_line(out, "movq %rsp, %rbp")
+    slot_count = function["frame"]["local_slots"] + function["frame"]["control_slots"] + function["frame"]["temporary_slots"]
+    stack_size = x86_native_stack_size(function["frame"]["scalar_spills"]) + slot_count * generated_value_slot_size()
+    stack_remainder = stack_size % 16
+    if stack_remainder != 0:
+        stack_size = stack_size + (16 - stack_remainder)
+    out = x86_native_line(out, "subq $" + str(stack_size) + ", %rsp")
+    global_index = 0
+    block_idx = 0
+    while block_idx < len(function["blocks"]):
+        block = function["blocks"][block_idx]
+        out = asm_writer_append(out, x86_native_block_label(function, block["id"]) + ":\n")
+        instruction_idx = 0
+        while instruction_idx < len(block["instructions"]):
+            out = x86_native_emit_instruction(out, block["instructions"][instruction_idx], instructions, global_index)
+            global_index = global_index + 1
+            instruction_idx = instruction_idx + 1
+        terminator = block["terminator"]
+        if terminator["op"] == "return":
+            out = x86_native_line(out, "movq " + x86_native_stack_operand(terminator["value"]) + ", %rax")
+            out = x86_native_line(out, "leave")
+            out = x86_native_line(out, "ret")
+        elif terminator["op"] == "jump":
+            out = x86_native_line(out, "jmp " + x86_native_block_label(function, terminator["target"]))
+        elif terminator["op"] == "branch":
+            out = x86_native_line(out, "cmpq $0, " + x86_native_stack_operand(terminator["condition"]))
+            out = x86_native_line(out, "jne " + x86_native_block_label(function, terminator["true_target"]))
+            out = x86_native_line(out, "jmp " + x86_native_block_label(function, terminator["false_target"]))
+        elif terminator["op"] == "unreachable":
+            out = x86_native_line(out, "ud2")
+        else:
+            fail("x86-native rejected code=v2-terminator-not-selected;op=" + terminator["op"])
+        block_idx = block_idx + 1
+    return out
+
+
+def x86_native_emit_v2_print_runtime(out):
+    out = asm_writer_append(out, "__tyrion_direct_print_int:\n")
+    out = x86_native_line(out, "pushq %rbp")
+    out = x86_native_line(out, "movq %rsp, %rbp")
+    out = x86_native_line(out, "subq $80, %rsp")
+    out = x86_native_line(out, "movl %edi, %ecx")
+    out = x86_native_line(out, "leaq -64(%rbp), %rdi")
+    out = x86_native_line(out, "movl $64, %esi")
+    out = x86_native_line(out, "leaq .L_tyrion_direct_int_format(%rip), %rdx")
+    out = x86_native_line(out, "xorl %eax, %eax")
+    out = x86_native_line(out, "call snprintf@PLT")
+    out = x86_native_line(out, "testl %eax, %eax")
+    out = x86_native_line(out, "jle .L_tyrion_direct_print_int_done")
+    out = x86_native_line(out, "movl %eax, %edx")
+    out = x86_native_line(out, "movl $1, %edi")
+    out = x86_native_line(out, "leaq -64(%rbp), %rsi")
+    out = x86_native_line(out, "call write@PLT")
+    out = asm_writer_append(out, ".L_tyrion_direct_print_int_done:\n")
+    out = x86_native_line(out, "leave")
+    out = x86_native_line(out, "ret")
+    return out
+
+
+def emit_linux_x86_64_native_v2_module_asm_into(out, module):
+    module = verify_native_ir_v2(module)
+    out = asm_writer_append(out, "# tyrion-native-ir-v2 target=x86_64-linux execution=direct\n")
+    out = asm_writer_append(out, ".section .note.GNU-stack,\"\",@progbits\n")
+    out = asm_writer_append(out, ".bss\n")
+    out = asm_writer_append(out, ".p2align 3\n")
+    out = asm_writer_append(out, "__tyrion_native_process_argc:\n.quad 0\n")
+    out = asm_writer_append(out, "__tyrion_native_process_argv:\n.quad 0\n")
+    out = asm_writer_append(out, ".text\n")
+    function_idx = 0
+    while function_idx < len(module["functions"]):
+        out = x86_native_emit_v2_function(out, module["functions"][function_idx])
+        function_idx = function_idx + 1
+    if x86_native_module_has_operation(module, "print_int"):
+        out = x86_native_emit_v2_print_runtime(out)
+    if len(module["constants"]) > 0:
+        out = asm_writer_append(out, ".section .rodata\n")
+    constant_idx = 0
+    while constant_idx < len(module["constants"]):
+        constant = module["constants"][constant_idx]
+        out = asm_writer_append(out, x86_native_constant_label(constant["id"]) + ":\n")
+        out = x86_native_emit_byte_span(out, constant["value"])
+        out = asm_writer_append(out, ".byte 0\n")
+        constant_idx = constant_idx + 1
+    if x86_native_module_has_operation(module, "print_int"):
+        out = asm_writer_append(out, ".L_tyrion_direct_int_format:\n.asciz \"%d\"\n")
+    return out
+
+
 def emit_linux_x86_64_native_module_asm_into(out, module):
-    module = verify_native_ir(module)
+    module = verify_native_ir_v1(module)
     extensions = []
     if "extensions" in module:
         extensions = module["extensions"]
@@ -16126,6 +16227,14 @@ def emit_linux_x86_64_native_module_asm(module):
     return text
 
 
+def emit_linux_x86_64_native_v2_module_asm(module):
+    writer = asm_writer_open_memory()
+    writer = emit_linux_x86_64_native_v2_module_asm_into(writer, module)
+    text = asm_writer_text(writer)
+    asm_writer_close(writer)
+    return text
+
+
 def emit_linux_x86_64_native_literal_asm(payload):
     return emit_linux_x86_64_native_module_asm(native_ir_literal_module(payload))
 
@@ -16264,3 +16373,18 @@ def emit_linux_x86_64_native_recursive_user_function_probe_asm():
 
 def emit_linux_x86_64_native_aggregate_expression_probe_asm():
     return emit_linux_x86_64_native_module_asm(native_ir_aggregate_expression_probe_module())
+
+
+def emit_linux_x86_64_native_v2_cfg_probe_asm():
+    return emit_linux_x86_64_native_v2_module_asm(native_ir_v2_cfg_probe_module())
+
+
+def emit_linux_x86_64_direct_source_asm(source):
+    target = target_spec("linux", "x86_64")
+    return emit_linux_x86_64_native_v2_module_asm(native_direct_source_module(source, target))
+
+
+def emit_linux_x86_64_direct_program_asm_into(out, program, extensions):
+    target = target_spec("linux", "x86_64")
+    module = native_direct_module_from_program(program, target, extensions)
+    return emit_linux_x86_64_native_v2_module_asm_into(out, module)

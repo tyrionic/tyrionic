@@ -52,6 +52,11 @@ def native_direct_collect_statement_locals(items, locals):
         statement = items[idx]
         if statement["kind"] == "assign" and statement["target"]["kind"] == "var":
             locals = native_direct_append_local(locals, statement["target"]["value"])
+        elif statement["kind"] == "assign" and statement["target"]["kind"] == "unpack":
+            target_idx = 0
+            while target_idx < len(statement["target"]["targets"]):
+                locals = native_direct_append_local(locals, statement["target"]["targets"][target_idx]["name"])
+                target_idx = target_idx + 1
         elif statement["kind"] == "if":
             locals = native_direct_collect_statement_locals(statement["body"], locals)
             branch_idx = 0
@@ -302,13 +307,17 @@ def native_direct_statement_temporary_depth(items):
         statement = items[idx]
         if statement["kind"] == "assign":
             statement_depth = native_direct_expression_temporary_depth(statement["value"])
+            if statement["target"]["kind"] == "index":
+                statement_depth = statement_depth + 1
+            elif statement["target"]["kind"] == "unpack":
+                statement_depth = statement_depth + 1
             if statement_depth > depth:
                 depth = statement_depth
             if statement["target"]["kind"] == "index":
-                statement_depth = native_direct_expression_temporary_depth(statement["target"]["receiver"])
+                statement_depth = 1 + native_direct_expression_temporary_depth(statement["target"]["receiver"])
                 if statement_depth > depth:
                     depth = statement_depth
-                statement_depth = native_direct_expression_temporary_depth(statement["target"]["index"])
+                statement_depth = 1 + native_direct_expression_temporary_depth(statement["target"]["index"])
                 if statement_depth > depth:
                     depth = statement_depth
         elif statement["kind"] == "if":
@@ -1529,12 +1538,104 @@ def native_direct_lower_value_into_slot(state, expression, destination_slot, pat
     return stored["state"]
 
 
+def native_direct_lower_unpack_assignment(state, statement, path):
+    target = statement["target"]
+    iterable_slot = native_direct_value_temporary_pair_slot(state, 0, 0, path + ".value")
+    state = native_direct_lower_value_into_slot(state, statement["value"], iterable_slot, path + ".value", 1)
+    count = native_direct_append_instruction(state, "direct_iterable_count", "i32", {"args": [iterable_slot]})
+    state = count["state"]
+    star_idx = -1
+    target_idx = 0
+    while target_idx < len(target["targets"]):
+        if target["targets"][target_idx]["star"]:
+            star_idx = target_idx
+        target_idx = target_idx + 1
+    required_count = len(target["targets"])
+    compare_operation = "eq"
+    if star_idx >= 0:
+        required_count = required_count - 1
+        compare_operation = "ge"
+    required = native_direct_append_const_int(state, required_count, "i32")
+    state = required["state"]
+    size_ok = native_direct_append_instruction(state, compare_operation, "i1", {"args": [count["result"], required["result"]]})
+    state = size_ok["state"]
+    condition_block = state["current_block"]
+    success_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_branch(size_ok["result"], success_block, -1))
+
+    state = native_direct_begin_next_block(state)
+    target_idx = 0
+    while target_idx < len(target["targets"]):
+        unpack_target = target["targets"][target_idx]
+        target_slot = native_direct_local_slot(state, unpack_target["name"])
+        if unpack_target["star"]:
+            start = native_direct_append_const_int(state, target_idx, "i32")
+            state = start["state"]
+            trailing_count = len(target["targets"]) - target_idx - 1
+            stop_result = count["result"]
+            if trailing_count > 0:
+                trailing = native_direct_append_const_int(state, trailing_count, "i32")
+                state = trailing["state"]
+                stop = native_direct_append_instruction(state, "sub", "i32", {"args": [count["result"], trailing["result"]]})
+                state = stop["state"]
+                stop_result = stop["result"]
+            copied = native_direct_append_instruction(state, "direct_slot_unpack_star", "i32", {"args": [target_slot, iterable_slot, start["result"], stop_result]})
+            state = copied["state"]
+        else:
+            item_index_result = -1
+            if star_idx >= 0 and target_idx > star_idx:
+                trailing_count = len(target["targets"]) - target_idx
+                trailing = native_direct_append_const_int(state, trailing_count, "i32")
+                state = trailing["state"]
+                item_index = native_direct_append_instruction(state, "sub", "i32", {"args": [count["result"], trailing["result"]]})
+                state = item_index["state"]
+                item_index_result = item_index["result"]
+            else:
+                item_index = native_direct_append_const_int(state, target_idx, "i32")
+                state = item_index["state"]
+                item_index_result = item_index["result"]
+            copied = native_direct_append_instruction(state, "direct_iterable_item_copy", "i32", {"args": [target_slot, iterable_slot, item_index_result]})
+            state = copied["state"]
+        state = native_direct_mark_local_initialized(state, unpack_target["name"])
+        target_idx = target_idx + 1
+    success_exit = state["current_block"]
+    state = native_direct_finish_block(state, native_ir_v2_jump(-1))
+
+    failure_block = state["next_block"]
+    state = native_direct_patch_branch_false_target(state, condition_block, failure_block)
+    state = native_direct_begin_next_block(state)
+    state = native_direct_append_write_fd(state, 2, "unpack assignment size mismatch\n")
+    state = native_direct_release_frame_slots(state)
+    failure = native_direct_append_const_int(state, 3, "i32")
+    state = native_direct_finish_block(failure["state"], native_ir_v2_return(failure["result"]))
+
+    merge_block = state["next_block"]
+    state = native_direct_patch_jump_target(state, success_exit, merge_block)
+    return native_direct_begin_next_block(state)
+
+
 def native_direct_lower_statement(state, statement, path):
     if statement["kind"] == "assign" and statement["target"]["kind"] == "var":
         target_name = statement["target"]["value"]
         target_slot = native_direct_local_slot(state, target_name)
         state = native_direct_lower_value_into_slot(state, statement["value"], target_slot, path + ".value", 0)
         return native_direct_mark_local_initialized(state, target_name)
+    if statement["kind"] == "assign" and statement["target"]["kind"] == "index":
+        target = statement["target"]
+        if target["receiver"]["kind"] != "var":
+            fail("direct-native lowering rejected code=index-assignment-receiver-not-lowered;position=" + path + ".target.receiver")
+        receiver_name = target["receiver"]["value"]
+        if not native_direct_name_in_list(state["initialized_locals"], receiver_name):
+            fail("direct-native lowering rejected code=local-read-before-assignment;name=" + receiver_name + ";position=" + path + ".target.receiver")
+        receiver_slot = native_direct_local_slot(state, receiver_name)
+        index_slot = native_direct_value_temporary_pair_slot(state, 0, 0, path + ".target.index")
+        value_slot = native_direct_value_temporary_pair_slot(state, 0, 1, path + ".value")
+        state = native_direct_lower_value_into_slot(state, target["index"], index_slot, path + ".target.index", 1)
+        state = native_direct_lower_value_into_slot(state, statement["value"], value_slot, path + ".value", 1)
+        stored = native_direct_append_instruction(state, "direct_slot_index_set", "i32", {"args": [receiver_slot, index_slot, value_slot]})
+        return stored["state"]
+    if statement["kind"] == "assign" and statement["target"]["kind"] == "unpack":
+        return native_direct_lower_unpack_assignment(state, statement, path)
     if statement["kind"] == "if":
         return native_direct_lower_if_statement(state, statement, path)
     if statement["kind"] == "while":

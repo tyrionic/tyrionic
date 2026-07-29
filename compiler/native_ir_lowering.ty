@@ -112,6 +112,13 @@ def native_direct_collect_aggregate_names(items, names):
                 while target_idx < len(statement["targets"]):
                     names = native_direct_append_unique_name(names, statement["targets"][target_idx])
                     target_idx = target_idx + 1
+            elif iterable["kind"] == "call" and iterable["callee"]["kind"] == "var" and iterable["callee"]["value"] == "enumerate" and len(iterable["args"]) > 0:
+                inner = iterable["args"][0]
+                if inner["kind"] == "var" and native_direct_name_in_list(names, inner["value"]):
+                    target_idx = 0
+                    while target_idx < len(statement["targets"]):
+                        names = native_direct_append_unique_name(names, statement["targets"][target_idx])
+                        target_idx = target_idx + 1
             names = native_direct_collect_aggregate_names(statement["body"], names)
         elif statement["kind"] == "while":
             names = native_direct_collect_aggregate_names(statement["body"], names)
@@ -150,6 +157,10 @@ def native_direct_collect_string_names(items, names):
             iterable = statement["iterable"]
             if iterable["kind"] == "var" and native_direct_name_in_list(names, iterable["value"]) and len(statement["targets"]) == 1:
                 names = native_direct_append_unique_name(names, statement["targets"][0])
+            elif iterable["kind"] == "call" and iterable["callee"]["kind"] == "var" and iterable["callee"]["value"] == "enumerate" and len(iterable["args"]) > 0 and len(statement["targets"]) == 2:
+                inner = iterable["args"][0]
+                if inner["kind"] == "var" and native_direct_name_in_list(names, inner["value"]):
+                    names = native_direct_append_unique_name(names, statement["targets"][1])
             names = native_direct_collect_string_names(statement["body"], names)
         elif statement["kind"] == "while":
             names = native_direct_collect_string_names(statement["body"], names)
@@ -174,6 +185,8 @@ def native_direct_for_control_slot_count(statement):
             inner = iterable["args"][0]
             if inner["kind"] == "list" or inner["kind"] == "tuple":
                 return 2 + len(inner["items"])
+            if inner["kind"] == "var":
+                return 3
         return 2
     if iterable["kind"] == "list" or iterable["kind"] == "tuple":
         return 1 + len(iterable["items"])
@@ -908,10 +921,13 @@ def native_direct_lower_literal_for_statement(state, statement, iterable, enumer
     return state
 
 
-def native_direct_lower_variable_for_statement(state, statement, path):
-    if len(statement["targets"]) != 1:
-        fail("direct-native lowering rejected code=for-variable-target-not-lowered;count=" + str(len(statement["targets"])) + ";position=" + path)
-    iterable_name = statement["iterable"]["value"]
+def native_direct_lower_variable_for_statement(state, statement, iterable_expression, enumerate_mode, enumerate_start_expression, path):
+    expected_targets = 1
+    if enumerate_mode:
+        expected_targets = 2
+    if len(statement["targets"]) != expected_targets:
+        fail("direct-native lowering rejected code=for-variable-target-not-lowered;count=" + str(len(statement["targets"])) + ";expected=" + str(expected_targets) + ";position=" + path)
+    iterable_name = iterable_expression["value"]
     if not native_direct_local_is_owned(state, iterable_name):
         fail("direct-native lowering rejected code=for-iterator-not-lowered;position=" + path + ".iterable")
     if not native_direct_name_in_list(state["initialized_locals"], iterable_name):
@@ -923,6 +939,11 @@ def native_direct_lower_variable_for_statement(state, statement, path):
     cursor = native_direct_take_loop_control_slot(state, path)
     state = cursor["state"]
     cursor_slot = cursor["slot"]
+    enumerate_slot = -1
+    if enumerate_mode:
+        enumerate_control = native_direct_take_loop_control_slot(state, path)
+        state = enumerate_control["state"]
+        enumerate_slot = enumerate_control["slot"]
     iterable_slot = native_direct_local_slot(state, iterable_name)
     copied = native_direct_append_instruction(state, "direct_slot_copy_owned", "slot_ptr", {"args": [snapshot_slot, iterable_slot]})
     state = copied["state"]
@@ -930,6 +951,16 @@ def native_direct_lower_variable_for_statement(state, statement, path):
     state = zero["state"]
     cursor_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [cursor_slot, zero["result"]]})
     state = cursor_stored["state"]
+    if enumerate_mode:
+        if enumerate_start_expression == none:
+            enumerate_start = native_direct_append_const_int(state, 0, "i32")
+        else:
+            enumerate_start = native_direct_lower_scalar_expression(state, enumerate_start_expression, path + ".iterable.start")
+        state = enumerate_start["state"]
+        if enumerate_start["type"] != "i32":
+            fail("direct-native lowering rejected code=enumerate-start-type-not-lowered;position=" + path + ".iterable.start")
+        enumerate_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [enumerate_slot, enumerate_start["result"]]})
+        state = enumerate_stored["state"]
 
     condition_block = state["next_block"]
     state = native_direct_finish_block(state, native_ir_v2_jump(condition_block))
@@ -944,7 +975,16 @@ def native_direct_lower_variable_for_statement(state, statement, path):
     state = native_direct_finish_block(state, native_ir_v2_branch(has_item["result"], body_block, -1))
 
     state = native_direct_begin_next_block(state)
-    target_name = statement["targets"][0]
+    value_target_idx = 0
+    if enumerate_mode:
+        enumerate_value = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [enumerate_slot]})
+        state = enumerate_value["state"]
+        enumerate_target_name = statement["targets"][0]
+        enumerate_target_slot = native_direct_local_slot(state, enumerate_target_name)
+        enumerate_published = native_direct_append_instruction(state, "direct_slot_set_int_owned", "slot_ptr", {"args": [enumerate_target_slot, enumerate_value["result"]]})
+        state = native_direct_mark_local_initialized(enumerate_published["state"], enumerate_target_name)
+        value_target_idx = 1
+    target_name = statement["targets"][value_target_idx]
     target_slot = native_direct_local_slot(state, target_name)
     item = native_direct_append_instruction(state, "direct_iterable_item_copy", "i32", {"args": [target_slot, snapshot_slot, current["result"]]})
     state = native_direct_mark_local_initialized(item["state"], target_name)
@@ -970,7 +1010,17 @@ def native_direct_lower_variable_for_statement(state, statement, path):
         next_value = native_direct_append_instruction(state, "add", "i32", {"args": [increment_current["result"], one["result"]]})
         state = next_value["state"]
         next_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [cursor_slot, next_value["result"]]})
-        state = native_direct_finish_block(next_stored["state"], native_ir_v2_jump(condition_block))
+        state = next_stored["state"]
+        if enumerate_mode:
+            enumerate_current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [enumerate_slot]})
+            state = enumerate_current["state"]
+            enumerate_one = native_direct_append_const_int(state, 1, "i32")
+            state = enumerate_one["state"]
+            enumerate_next = native_direct_append_instruction(state, "add", "i32", {"args": [enumerate_current["result"], enumerate_one["result"]]})
+            state = enumerate_next["state"]
+            enumerate_next_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [enumerate_slot, enumerate_next["result"]]})
+            state = enumerate_next_stored["state"]
+        state = native_direct_finish_block(state, native_ir_v2_jump(condition_block))
 
     exit_block = state["next_block"]
     state = native_direct_patch_branch_false_target(state, condition_block, exit_block)
@@ -989,7 +1039,7 @@ def native_direct_lower_for_statement(state, statement, path):
     if iterable["kind"] == "list" or iterable["kind"] == "tuple":
         return native_direct_lower_literal_for_statement(state, statement, iterable, False, none, path)
     if iterable["kind"] == "var":
-        return native_direct_lower_variable_for_statement(state, statement, path)
+        return native_direct_lower_variable_for_statement(state, statement, iterable, False, none, path)
     range_expression = iterable
     enumerate_mode = False
     enumerate_start_expression = none
@@ -1008,6 +1058,8 @@ def native_direct_lower_for_statement(state, statement, path):
                 enumerate_start_expression = enumerate_start_expression["value"]
     if enumerate_mode and (range_expression["kind"] == "list" or range_expression["kind"] == "tuple"):
         return native_direct_lower_literal_for_statement(state, statement, range_expression, True, enumerate_start_expression, path)
+    if enumerate_mode and range_expression["kind"] == "var":
+        return native_direct_lower_variable_for_statement(state, statement, range_expression, True, enumerate_start_expression, path)
     expected_targets = 1
     if enumerate_mode:
         expected_targets = 2

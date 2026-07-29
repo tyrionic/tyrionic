@@ -824,6 +824,13 @@ def verify_native_ir_v2_instruction(module, function, dominators, block_idx, ins
         native_ir_v2_require_value(function, dominators, block_idx, instruction_idx, args[0], instruction["type"], op)
         native_ir_v2_require_value(function, dominators, block_idx, instruction_idx, args[1], instruction["type"], op)
         return
+    if op == "and_i1":
+        args = fields["args"]
+        if len(args) != 2 or instruction["type"] != "i1":
+            fail("native-ir rejected code=operation-arity-or-type;op=" + op)
+        native_ir_v2_require_value(function, dominators, block_idx, instruction_idx, args[0], "i1", op)
+        native_ir_v2_require_value(function, dominators, block_idx, instruction_idx, args[1], "i1", op)
+        return
     if op == "eq" or op == "ne" or op == "lt" or op == "le" or op == "gt" or op == "ge":
         args = fields["args"]
         if len(args) != 2 or instruction["type"] != "i1":

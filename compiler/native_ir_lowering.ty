@@ -119,6 +119,11 @@ def native_direct_collect_aggregate_names(items, names):
                     while target_idx < len(statement["targets"]):
                         names = native_direct_append_unique_name(names, statement["targets"][target_idx])
                         target_idx = target_idx + 1
+            elif iterable["kind"] == "call" and iterable["callee"]["kind"] == "var" and iterable["callee"]["value"] == "zip":
+                target_idx = 0
+                while target_idx < len(statement["targets"]):
+                    names = native_direct_append_unique_name(names, statement["targets"][target_idx])
+                    target_idx = target_idx + 1
             names = native_direct_collect_aggregate_names(statement["body"], names)
         elif statement["kind"] == "while":
             names = native_direct_collect_aggregate_names(statement["body"], names)
@@ -188,6 +193,8 @@ def native_direct_for_control_slot_count(statement):
             if inner["kind"] == "var":
                 return 3
         return 2
+    if iterable["kind"] == "call" and iterable["callee"]["kind"] == "var" and iterable["callee"]["value"] == "zip":
+        return len(iterable["args"]) + 1
     if iterable["kind"] == "list" or iterable["kind"] == "tuple":
         return 1 + len(iterable["items"])
     if iterable["kind"] == "var":
@@ -238,6 +245,18 @@ def native_direct_expression_temporary_depth(expression):
                 depth = value_depth
             entry_idx = entry_idx + 1
         return depth
+    if kind == "call":
+        depth = 0
+        arg_idx = 0
+        while arg_idx < len(expression["args"]):
+            argument = expression["args"][arg_idx]
+            if argument["kind"] == "kwarg":
+                argument = argument["value"]
+            argument_depth = native_direct_expression_temporary_depth(argument)
+            if argument_depth > depth:
+                depth = argument_depth
+            arg_idx = arg_idx + 1
+        return depth
     return 0
 
 
@@ -264,6 +283,10 @@ def native_direct_statement_temporary_depth(items):
             if statement_depth > depth:
                 depth = statement_depth
         elif statement["kind"] == "while" or statement["kind"] == "for":
+            if statement["kind"] == "for":
+                statement_depth = native_direct_expression_temporary_depth(statement["iterable"])
+                if statement_depth > depth:
+                    depth = statement_depth
             statement_depth = native_direct_statement_temporary_depth(statement["body"])
             if statement_depth > depth:
                 depth = statement_depth
@@ -1033,6 +1056,105 @@ def native_direct_lower_variable_for_statement(state, statement, iterable_expres
     return state
 
 
+def native_direct_lower_zip_for_statement(state, statement, expression, path):
+    if len(expression["args"]) == 0 or len(statement["targets"]) != len(expression["args"]):
+        fail("direct-native lowering rejected code=zip-target-arity;targets=" + str(len(statement["targets"])) + ";iterables=" + str(len(expression["args"])) + ";position=" + path)
+    incoming_initialized = state["initialized_locals"]
+    snapshots = []
+    arg_idx = 0
+    while arg_idx < len(expression["args"]):
+        argument = expression["args"][arg_idx]
+        if argument["kind"] == "kwarg":
+            fail("direct-native lowering rejected code=zip-keyword-not-lowered;position=" + path + ".iterable.arg[" + str(arg_idx) + "]")
+        snapshot = native_direct_take_loop_control_slot(state, path)
+        state = snapshot["state"]
+        snapshot_slot = snapshot["slot"]
+        if argument["kind"] == "var" and native_direct_local_is_owned(state, argument["value"]):
+            if not native_direct_name_in_list(state["initialized_locals"], argument["value"]):
+                fail("direct-native lowering rejected code=local-read-before-assignment;name=" + argument["value"] + ";position=" + path + ".iterable.arg[" + str(arg_idx) + "]")
+            source_slot = native_direct_local_slot(state, argument["value"])
+            copied = native_direct_append_instruction(state, "direct_slot_copy_owned", "slot_ptr", {"args": [snapshot_slot, source_slot]})
+            state = copied["state"]
+        elif argument["kind"] == "string" or argument["kind"] == "list" or argument["kind"] == "tuple" or argument["kind"] == "set" or argument["kind"] == "dict":
+            state = native_direct_lower_value_into_slot(state, argument, snapshot_slot, path + ".iterable.arg[" + str(arg_idx) + "]", 0)
+        else:
+            fail("direct-native lowering rejected code=zip-iterator-not-lowered;kind=" + argument["kind"] + ";position=" + path + ".iterable.arg[" + str(arg_idx) + "]")
+        snapshots = method_append(snapshots, snapshot_slot)
+        arg_idx = arg_idx + 1
+
+    cursor = native_direct_take_loop_control_slot(state, path)
+    state = cursor["state"]
+    cursor_slot = cursor["slot"]
+    zero = native_direct_append_const_int(state, 0, "i32")
+    state = zero["state"]
+    cursor_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [cursor_slot, zero["result"]]})
+    state = cursor_stored["state"]
+
+    condition_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_jump(condition_block))
+    state = native_direct_begin_next_block(state)
+    current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [cursor_slot]})
+    state = current["state"]
+    has_all = -1
+    snapshot_idx = 0
+    while snapshot_idx < len(snapshots):
+        count = native_direct_append_instruction(state, "direct_iterable_count", "i32", {"args": [snapshots[snapshot_idx]]})
+        state = count["state"]
+        has_item = native_direct_append_instruction(state, "lt", "i1", {"args": [current["result"], count["result"]]})
+        state = has_item["state"]
+        if has_all < 0:
+            has_all = has_item["result"]
+        else:
+            combined = native_direct_append_instruction(state, "and_i1", "i1", {"args": [has_all, has_item["result"]]})
+            state = combined["state"]
+            has_all = combined["result"]
+        snapshot_idx = snapshot_idx + 1
+    body_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_branch(has_all, body_block, -1))
+
+    state = native_direct_begin_next_block(state)
+    target_idx = 0
+    while target_idx < len(statement["targets"]):
+        target_name = statement["targets"][target_idx]
+        target_slot = native_direct_local_slot(state, target_name)
+        item = native_direct_append_instruction(state, "direct_iterable_item_copy", "i32", {"args": [target_slot, snapshots[target_idx], current["result"]]})
+        state = native_direct_mark_local_initialized(item["state"], target_name)
+        target_idx = target_idx + 1
+    state = native_direct_push_loop(state, -1)
+    state = native_direct_lower_statements(state, statement["body"], path + ".body")
+    popped = native_direct_pop_loop(state)
+    state = popped["state"]
+    context = popped["context"]
+    has_increment = not state["terminated"] or len(context["continue_blocks"]) > 0
+    if has_increment:
+        increment_block = state["next_block"]
+        if not state["terminated"]:
+            state = native_direct_finish_block(state, native_ir_v2_jump(increment_block))
+        continue_idx = 0
+        while continue_idx < len(context["continue_blocks"]):
+            state = native_direct_patch_jump_target(state, context["continue_blocks"][continue_idx], increment_block)
+            continue_idx = continue_idx + 1
+        state = native_direct_begin_next_block(state)
+        increment_current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [cursor_slot]})
+        state = increment_current["state"]
+        one = native_direct_append_const_int(state, 1, "i32")
+        state = one["state"]
+        next_value = native_direct_append_instruction(state, "add", "i32", {"args": [increment_current["result"], one["result"]]})
+        state = next_value["state"]
+        next_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [cursor_slot, next_value["result"]]})
+        state = native_direct_finish_block(next_stored["state"], native_ir_v2_jump(condition_block))
+
+    exit_block = state["next_block"]
+    state = native_direct_patch_branch_false_target(state, condition_block, exit_block)
+    break_idx = 0
+    while break_idx < len(context["break_blocks"]):
+        state = native_direct_patch_jump_target(state, context["break_blocks"][break_idx], exit_block)
+        break_idx = break_idx + 1
+    state = native_direct_begin_next_block(state)
+    state["initialized_locals"] = incoming_initialized
+    return state
+
+
 def native_direct_lower_for_statement(state, statement, path):
     incoming_initialized = state["initialized_locals"]
     iterable = statement["iterable"]
@@ -1040,6 +1162,8 @@ def native_direct_lower_for_statement(state, statement, path):
         return native_direct_lower_literal_for_statement(state, statement, iterable, False, none, path)
     if iterable["kind"] == "var":
         return native_direct_lower_variable_for_statement(state, statement, iterable, False, none, path)
+    if iterable["kind"] == "call" and iterable["callee"]["kind"] == "var" and iterable["callee"]["value"] == "zip":
+        return native_direct_lower_zip_for_statement(state, statement, iterable, path)
     range_expression = iterable
     enumerate_mode = False
     enumerate_start_expression = none

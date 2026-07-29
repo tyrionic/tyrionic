@@ -949,6 +949,10 @@ def x86_native_emit_instruction(out, instruction, instructions, index):
         else:
             out = x86_native_line(out, "imulq " + x86_native_stack_operand(args[1]) + ", %rax")
         return x86_native_line(out, "movq %rax, " + result_slot)
+    if op == "and_i1":
+        out = x86_native_line(out, "movq " + x86_native_stack_operand(args[0]) + ", %rax")
+        out = x86_native_line(out, "andq " + x86_native_stack_operand(args[1]) + ", %rax")
+        return x86_native_line(out, "movq %rax, " + result_slot)
     if op == "eq" or op == "ne" or op == "lt" or op == "le" or op == "gt" or op == "ge":
         out = x86_native_line(out, "movq " + x86_native_stack_operand(args[0]) + ", %rax")
         out = x86_native_line(out, "cmpq " + x86_native_stack_operand(args[1]) + ", %rax")

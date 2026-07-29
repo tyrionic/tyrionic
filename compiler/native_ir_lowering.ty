@@ -75,6 +75,52 @@ def native_direct_collect_locals(program):
     return native_direct_collect_statement_locals(program["items"], [])
 
 
+def native_direct_append_unique_name(names, name):
+    idx = 0
+    while idx < len(names):
+        if names[idx] == name:
+            return names
+        idx = idx + 1
+    return method_append(names, name)
+
+
+def native_direct_collect_aggregate_names(items, names):
+    idx = 0
+    while idx < len(items):
+        statement = items[idx]
+        if statement["kind"] == "assign" and statement["target"]["kind"] == "var":
+            value = statement["value"]
+            if value["kind"] == "list" or value["kind"] == "tuple":
+                names = native_direct_append_unique_name(names, statement["target"]["value"])
+            elif value["kind"] == "var":
+                source_idx = 0
+                while source_idx < len(names):
+                    if names[source_idx] == value["value"]:
+                        names = native_direct_append_unique_name(names, statement["target"]["value"])
+                    source_idx = source_idx + 1
+        elif statement["kind"] == "if":
+            names = native_direct_collect_aggregate_names(statement["body"], names)
+            branch_idx = 0
+            while branch_idx < len(statement["elifs"]):
+                names = native_direct_collect_aggregate_names(statement["elifs"][branch_idx]["body"], names)
+                branch_idx = branch_idx + 1
+            names = native_direct_collect_aggregate_names(statement["else_body"], names)
+        elif statement["kind"] == "while" or statement["kind"] == "for":
+            names = native_direct_collect_aggregate_names(statement["body"], names)
+        idx = idx + 1
+    return names
+
+
+def native_direct_aggregate_names(program):
+    names = []
+    changed = True
+    while changed:
+        prior_count = len(names)
+        names = native_direct_collect_aggregate_names(program["items"], names)
+        changed = len(names) != prior_count
+    return names
+
+
 def native_direct_for_control_slot_count(statement):
     iterable = statement["iterable"]
     if iterable["kind"] == "call" and iterable["callee"]["kind"] == "var" and iterable["callee"]["value"] == "enumerate":
@@ -85,6 +131,8 @@ def native_direct_for_control_slot_count(statement):
         return 2
     if iterable["kind"] == "list" or iterable["kind"] == "tuple":
         return 1 + len(iterable["items"])
+    if iterable["kind"] == "var":
+        return 2
     return 1
 
 
@@ -114,7 +162,8 @@ def native_direct_plan(program, application, target):
         fail("direct-native lowering rejected code=analysis-contract")
     if application["program"] != program:
         fail("direct-native lowering rejected code=analysis-program-mismatch")
-    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "application": application["application"], "extensions": [], "locals": native_direct_collect_locals(program), "loop_control_slot_count": native_direct_count_for_control_slots(program["items"])}
+    aggregate_names = native_direct_aggregate_names(program)
+    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "application": application["application"], "extensions": [], "locals": native_direct_collect_locals(program), "loop_control_slot_count": native_direct_count_for_control_slots(program["items"]), "aggregate_names": aggregate_names, "aggregate_core": len(aggregate_names) > 0}
 
 
 def native_direct_constant_id(state, kind, value):
@@ -218,6 +267,17 @@ def native_direct_append_write(state, payload):
     return native_direct_append_write_fd(state, 1, payload)
 
 
+def native_direct_release_frame_slots(state):
+    if not state["aggregate_core"]:
+        return state
+    slot_idx = 0
+    while slot_idx < len(state["frame_slots"]):
+        released = native_direct_append_instruction(state, "direct_slot_release", "i32", {"args": [state["frame_slots"][slot_idx]]})
+        state = released["state"]
+        slot_idx = slot_idx + 1
+    return state
+
+
 def native_direct_literal_text(expr):
     kind = expr["kind"]
     if kind == "string":
@@ -249,6 +309,10 @@ def native_direct_name_in_list(names, name):
             return True
         idx = idx + 1
     return False
+
+
+def native_direct_local_is_aggregate(state, name):
+    return native_direct_name_in_list(state["aggregate_names"], name)
 
 
 def native_direct_mark_local_initialized(state, name):
@@ -726,11 +790,88 @@ def native_direct_lower_literal_for_statement(state, statement, iterable, enumer
     return state
 
 
+def native_direct_lower_variable_for_statement(state, statement, path):
+    if len(statement["targets"]) != 1:
+        fail("direct-native lowering rejected code=for-variable-target-not-lowered;count=" + str(len(statement["targets"])) + ";position=" + path)
+    iterable_name = statement["iterable"]["value"]
+    if not native_direct_local_is_aggregate(state, iterable_name):
+        fail("direct-native lowering rejected code=for-iterator-not-lowered;position=" + path + ".iterable")
+    if not native_direct_name_in_list(state["initialized_locals"], iterable_name):
+        fail("direct-native lowering rejected code=local-read-before-assignment;name=" + iterable_name + ";position=" + path + ".iterable")
+    incoming_initialized = state["initialized_locals"]
+    snapshot = native_direct_take_loop_control_slot(state, path)
+    state = snapshot["state"]
+    snapshot_slot = snapshot["slot"]
+    cursor = native_direct_take_loop_control_slot(state, path)
+    state = cursor["state"]
+    cursor_slot = cursor["slot"]
+    iterable_slot = native_direct_local_slot(state, iterable_name)
+    copied = native_direct_append_instruction(state, "direct_slot_copy_owned", "slot_ptr", {"args": [snapshot_slot, iterable_slot]})
+    state = copied["state"]
+    zero = native_direct_append_const_int(state, 0, "i32")
+    state = zero["state"]
+    cursor_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [cursor_slot, zero["result"]]})
+    state = cursor_stored["state"]
+
+    condition_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_jump(condition_block))
+    state = native_direct_begin_next_block(state)
+    current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [cursor_slot]})
+    state = current["state"]
+    count = native_direct_append_instruction(state, "direct_iterable_count", "i32", {"args": [snapshot_slot]})
+    state = count["state"]
+    has_item = native_direct_append_instruction(state, "lt", "i1", {"args": [current["result"], count["result"]]})
+    state = has_item["state"]
+    body_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_branch(has_item["result"], body_block, -1))
+
+    state = native_direct_begin_next_block(state)
+    target_name = statement["targets"][0]
+    target_slot = native_direct_local_slot(state, target_name)
+    item = native_direct_append_instruction(state, "direct_iterable_item_copy", "i32", {"args": [target_slot, snapshot_slot, current["result"]]})
+    state = native_direct_mark_local_initialized(item["state"], target_name)
+    state = native_direct_push_loop(state, -1)
+    state = native_direct_lower_statements(state, statement["body"], path + ".body")
+    popped = native_direct_pop_loop(state)
+    state = popped["state"]
+    context = popped["context"]
+    has_increment = not state["terminated"] or len(context["continue_blocks"]) > 0
+    if has_increment:
+        increment_block = state["next_block"]
+        if not state["terminated"]:
+            state = native_direct_finish_block(state, native_ir_v2_jump(increment_block))
+        continue_idx = 0
+        while continue_idx < len(context["continue_blocks"]):
+            state = native_direct_patch_jump_target(state, context["continue_blocks"][continue_idx], increment_block)
+            continue_idx = continue_idx + 1
+        state = native_direct_begin_next_block(state)
+        increment_current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [cursor_slot]})
+        state = increment_current["state"]
+        one = native_direct_append_const_int(state, 1, "i32")
+        state = one["state"]
+        next_value = native_direct_append_instruction(state, "add", "i32", {"args": [increment_current["result"], one["result"]]})
+        state = next_value["state"]
+        next_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [cursor_slot, next_value["result"]]})
+        state = native_direct_finish_block(next_stored["state"], native_ir_v2_jump(condition_block))
+
+    exit_block = state["next_block"]
+    state = native_direct_patch_branch_false_target(state, condition_block, exit_block)
+    break_idx = 0
+    while break_idx < len(context["break_blocks"]):
+        state = native_direct_patch_jump_target(state, context["break_blocks"][break_idx], exit_block)
+        break_idx = break_idx + 1
+    state = native_direct_begin_next_block(state)
+    state["initialized_locals"] = incoming_initialized
+    return state
+
+
 def native_direct_lower_for_statement(state, statement, path):
     incoming_initialized = state["initialized_locals"]
     iterable = statement["iterable"]
     if iterable["kind"] == "list" or iterable["kind"] == "tuple":
         return native_direct_lower_literal_for_statement(state, statement, iterable, False, none, path)
+    if iterable["kind"] == "var":
+        return native_direct_lower_variable_for_statement(state, statement, path)
     range_expression = iterable
     enumerate_mode = False
     enumerate_start_expression = none
@@ -794,6 +935,7 @@ def native_direct_lower_for_statement(state, statement, path):
 
     state = native_direct_begin_next_block(state)
     state = native_direct_append_write_fd(state, 2, "range() arg 3 must not be zero\n")
+    state = native_direct_release_frame_slots(state)
     failure = native_direct_append_const_int(state, 3, "i32")
     state = native_direct_finish_block(failure["state"], native_ir_v2_return(failure["result"]))
 
@@ -884,12 +1026,35 @@ def native_direct_lower_for_statement(state, statement, path):
 
 def native_direct_lower_statement(state, statement, path):
     if statement["kind"] == "assign" and statement["target"]["kind"] == "var":
+        target_name = statement["target"]["value"]
+        target_slot = native_direct_local_slot(state, target_name)
+        if statement["value"]["kind"] == "list" or statement["value"]["kind"] == "tuple":
+            args = [target_slot]
+            item_idx = 0
+            while item_idx < len(statement["value"]["items"]):
+                item = native_direct_lower_scalar_expression(state, statement["value"]["items"][item_idx], path + ".value.item[" + str(item_idx) + "]")
+                state = item["state"]
+                if item["type"] != "i32":
+                    fail("direct-native lowering rejected code=collection-item-type-not-lowered;position=" + path + ".value.item[" + str(item_idx) + "]")
+                args = method_append(args, item["result"])
+                item_idx = item_idx + 1
+            stored = native_direct_append_instruction(state, "direct_slot_set_collection", "slot_ptr", {"args": args, "collection_kind": statement["value"]["kind"]})
+            return native_direct_mark_local_initialized(stored["state"], target_name)
+        if statement["value"]["kind"] == "var" and native_direct_local_is_aggregate(state, statement["value"]["value"]):
+            source_name = statement["value"]["value"]
+            if not native_direct_name_in_list(state["initialized_locals"], source_name):
+                fail("direct-native lowering rejected code=local-read-before-assignment;name=" + source_name + ";position=" + path + ".value")
+            source_slot = native_direct_local_slot(state, source_name)
+            copied = native_direct_append_instruction(state, "direct_slot_copy_owned", "slot_ptr", {"args": [target_slot, source_slot]})
+            return native_direct_mark_local_initialized(copied["state"], target_name)
         value = native_direct_lower_scalar_expression(state, statement["value"], path + ".value")
         if value["type"] != "i32":
             fail("direct-native lowering rejected code=assignment-type-not-lowered;position=" + path)
-        slot = native_direct_local_slot(value["state"], statement["target"]["value"])
-        stored = native_direct_append_instruction(value["state"], "slot_set_int", "slot_ptr", {"args": [slot, value["result"]]})
-        return native_direct_mark_local_initialized(stored["state"], statement["target"]["value"])
+        store_operation = "slot_set_int"
+        if state["aggregate_core"]:
+            store_operation = "direct_slot_set_int_owned"
+        stored = native_direct_append_instruction(value["state"], store_operation, "slot_ptr", {"args": [target_slot, value["result"]]})
+        return native_direct_mark_local_initialized(stored["state"], target_name)
     if statement["kind"] == "if":
         return native_direct_lower_if_statement(state, statement, path)
     if statement["kind"] == "while":
@@ -906,7 +1071,7 @@ def native_direct_lower_statement(state, statement, path):
 def native_direct_module_from_plan(plan):
     if plan["contract"] != "tyrion-native-direct-plan-v1":
         fail("direct-native lowering rejected code=plan-contract")
-    state = {"blocks": [], "current_block": 0, "next_block": 1, "instructions": [], "constants": [], "next_result": 0, "locals": [], "initialized_locals": [], "loop_contexts": [], "loop_control_slots": [], "next_loop_control_slot": 0, "terminated": False}
+    state = {"blocks": [], "current_block": 0, "next_block": 1, "instructions": [], "constants": [], "next_result": 0, "locals": [], "initialized_locals": [], "loop_contexts": [], "loop_control_slots": [], "next_loop_control_slot": 0, "aggregate_names": plan["aggregate_names"], "aggregate_core": plan["aggregate_core"], "frame_slots": [], "terminated": False}
     local_idx = 0
     while local_idx < len(plan["locals"]):
         allocated = native_direct_append_instruction(state, "slot_alloc", "slot_ptr", {"args": []})
@@ -914,6 +1079,7 @@ def native_direct_module_from_plan(plan):
         zeroed = native_direct_append_instruction(state, "slot_zero", "slot_ptr", {"args": [allocated["result"]]})
         state = zeroed["state"]
         state["locals"] = method_append(state["locals"], {"name": plan["locals"][local_idx]["name"], "slot": zeroed["result"]})
+        state["frame_slots"] = method_append(state["frame_slots"], zeroed["result"])
         local_idx = local_idx + 1
     control_slot_idx = 0
     while control_slot_idx < plan["loop_control_slot_count"]:
@@ -922,14 +1088,18 @@ def native_direct_module_from_plan(plan):
         zeroed = native_direct_append_instruction(state, "slot_zero", "slot_ptr", {"args": [allocated["result"]]})
         state = zeroed["state"]
         state["loop_control_slots"] = method_append(state["loop_control_slots"], zeroed["result"])
+        state["frame_slots"] = method_append(state["frame_slots"], zeroed["result"])
         control_slot_idx = control_slot_idx + 1
     state = native_direct_lower_statements(state, plan["program"]["items"], "program")
     exit_value = native_direct_append_const_int(state, 0, "i32")
     state = exit_value["state"]
+    state = native_direct_release_frame_slots(state)
     state = native_direct_finish_block(state, native_ir_v2_return(exit_value["result"]))
     frame = native_ir_v2_frame(len(plan["locals"]), plan["loop_control_slot_count"], 0, state["next_result"])
     function = native_ir_v2_function(0, "main", "public", [], "i32", frame, state["blocks"])
     function["effects"] = ["io"]
+    if plan["aggregate_core"]:
+        function["ownership"] = "owned-frame-cleanup"
     functions = []
     functions.append(function)
     externals = []
@@ -937,7 +1107,12 @@ def native_direct_module_from_plan(plan):
     components = []
     components.append("scalar-core")
     components.append("print")
-    return native_ir_v2_module(functions, state["constants"], externals, components, True)
+    if plan["aggregate_core"]:
+        components.append("aggregate-core")
+    module = native_ir_v2_module(functions, state["constants"], externals, components, True)
+    if plan["aggregate_core"]:
+        module["ownership_manifest"] = "direct-owned-aggregate"
+    return module
 
 
 def native_direct_module_from_program(program, target, extensions):

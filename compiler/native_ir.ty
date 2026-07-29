@@ -3003,6 +3003,47 @@ def native_ir_v2_missing_component_probe():
     return verify_native_ir(module)
 
 
+def native_ir_v2_missing_aggregate_component_probe():
+    instructions = []
+    instructions.append(native_ir_v2_instruction(0, "slot_alloc", "slot_ptr", {"args": []}))
+    instructions.append(native_ir_v2_instruction(1, "slot_zero", "slot_ptr", {"args": [0]}))
+    instructions.append(native_ir_v2_instruction(2, "direct_slot_set_collection", "slot_ptr", {"args": [1], "collection_kind": "list"}))
+    instructions.append(native_ir_v2_const_int(3, 0, "i32"))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(3)))
+    module = native_ir_v2_probe_module(blocks, 4)
+    functions = module["functions"]
+    function = functions[0]
+    function["frame"] = native_ir_v2_frame(1, 0, 0, 4)
+    functions[0] = function
+    module["functions"] = functions
+    return verify_native_ir(module)
+
+
+def native_ir_v2_released_slot_probe():
+    instructions = []
+    instructions.append(native_ir_v2_instruction(0, "slot_alloc", "slot_ptr", {"args": []}))
+    instructions.append(native_ir_v2_instruction(1, "slot_zero", "slot_ptr", {"args": [0]}))
+    instructions.append(native_ir_v2_const_int(2, 42, "i32"))
+    instructions.append(native_ir_v2_instruction(3, "direct_slot_set_int_owned", "slot_ptr", {"args": [1, 2]}))
+    instructions.append(native_ir_v2_instruction(4, "direct_slot_release", "i32", {"args": [1]}))
+    instructions.append(native_ir_v2_instruction(5, "slot_get_int", "i32", {"args": [1]}))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(5)))
+    module = native_ir_v2_probe_module(blocks, 6)
+    functions = module["functions"]
+    function = functions[0]
+    function["frame"] = native_ir_v2_frame(1, 0, 0, 6)
+    function["ownership"] = "owned-frame-cleanup"
+    functions[0] = function
+    module["functions"] = functions
+    components = module["components"]
+    components.append("aggregate-core")
+    module["components"] = components
+    module["ownership_manifest"] = "direct-owned-aggregate"
+    return verify_native_ir(module)
+
+
 def native_ir_v2_frame_slot_count_probe():
     instructions = []
     instructions.append(native_ir_v2_instruction(0, "slot_alloc", "slot_ptr", {"args": []}))

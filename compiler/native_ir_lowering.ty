@@ -246,16 +246,51 @@ def native_direct_expression_temporary_depth(expression):
             entry_idx = entry_idx + 1
         return depth
     if kind == "call":
-        depth = 0
+        depth = 1
         arg_idx = 0
         while arg_idx < len(expression["args"]):
             argument = expression["args"][arg_idx]
             if argument["kind"] == "kwarg":
                 argument = argument["value"]
-            argument_depth = native_direct_expression_temporary_depth(argument)
+            argument_depth = 1 + native_direct_expression_temporary_depth(argument)
             if argument_depth > depth:
                 depth = argument_depth
             arg_idx = arg_idx + 1
+        return depth
+    if kind == "method_call":
+        depth = 1 + native_direct_expression_temporary_depth(expression["receiver"])
+        arg_idx = 0
+        while arg_idx < len(expression["args"]):
+            argument = expression["args"][arg_idx]
+            if argument["kind"] == "kwarg":
+                argument = argument["value"]
+            argument_depth = 1 + native_direct_expression_temporary_depth(argument)
+            if argument_depth > depth:
+                depth = argument_depth
+            arg_idx = arg_idx + 1
+        return depth
+    if kind == "binary":
+        left_depth = 1 + native_direct_expression_temporary_depth(expression["left"])
+        right_depth = 1 + native_direct_expression_temporary_depth(expression["right"])
+        if left_depth > right_depth:
+            return left_depth
+        return right_depth
+    if kind == "unary":
+        return 1 + native_direct_expression_temporary_depth(expression["value"])
+    if kind == "index":
+        receiver_depth = 1 + native_direct_expression_temporary_depth(expression["receiver"])
+        index_depth = 1 + native_direct_expression_temporary_depth(expression["index"])
+        if receiver_depth > index_depth:
+            return receiver_depth
+        return index_depth
+    if kind == "slice":
+        depth = 1 + native_direct_expression_temporary_depth(expression["receiver"])
+        start_depth = 1 + native_direct_expression_temporary_depth(expression["start"])
+        stop_depth = 1 + native_direct_expression_temporary_depth(expression["stop"])
+        if start_depth > depth:
+            depth = start_depth
+        if stop_depth > depth:
+            depth = stop_depth
         return depth
     return 0
 
@@ -269,7 +304,17 @@ def native_direct_statement_temporary_depth(items):
             statement_depth = native_direct_expression_temporary_depth(statement["value"])
             if statement_depth > depth:
                 depth = statement_depth
+            if statement["target"]["kind"] == "index":
+                statement_depth = native_direct_expression_temporary_depth(statement["target"]["receiver"])
+                if statement_depth > depth:
+                    depth = statement_depth
+                statement_depth = native_direct_expression_temporary_depth(statement["target"]["index"])
+                if statement_depth > depth:
+                    depth = statement_depth
         elif statement["kind"] == "if":
+            statement_depth = 1 + native_direct_expression_temporary_depth(statement["condition"])
+            if statement_depth > depth:
+                depth = statement_depth
             statement_depth = native_direct_statement_temporary_depth(statement["body"])
             if statement_depth > depth:
                 depth = statement_depth
@@ -283,11 +328,19 @@ def native_direct_statement_temporary_depth(items):
             if statement_depth > depth:
                 depth = statement_depth
         elif statement["kind"] == "while" or statement["kind"] == "for":
+            if statement["kind"] == "while":
+                statement_depth = 1 + native_direct_expression_temporary_depth(statement["condition"])
+                if statement_depth > depth:
+                    depth = statement_depth
             if statement["kind"] == "for":
                 statement_depth = native_direct_expression_temporary_depth(statement["iterable"])
                 if statement_depth > depth:
                     depth = statement_depth
             statement_depth = native_direct_statement_temporary_depth(statement["body"])
+            if statement_depth > depth:
+                depth = statement_depth
+        elif statement["kind"] == "expr":
+            statement_depth = native_direct_expression_temporary_depth(statement["value"])
             if statement_depth > depth:
                 depth = statement_depth
         idx = idx + 1
@@ -300,9 +353,13 @@ def native_direct_plan(program, application, target):
         fail("direct-native lowering rejected code=analysis-contract")
     if application["program"] != program:
         fail("direct-native lowering rejected code=analysis-program-mismatch")
+    locals = native_direct_collect_locals(program)
+    loop_control_slot_count = native_direct_count_for_control_slots(program["items"])
+    value_temporary_slot_count = native_direct_statement_temporary_depth(program["items"]) * 4
     aggregate_names = native_direct_aggregate_names(program)
     string_names = native_direct_string_names(program)
-    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "application": application["application"], "extensions": [], "locals": native_direct_collect_locals(program), "loop_control_slot_count": native_direct_count_for_control_slots(program["items"]), "value_temporary_slot_count": native_direct_statement_temporary_depth(program["items"]) * 2, "aggregate_names": aggregate_names, "string_names": string_names, "aggregate_core": len(aggregate_names) > 0 or len(string_names) > 0}
+    aggregate_core = len(locals) > 0 or loop_control_slot_count > 0 or value_temporary_slot_count > 0
+    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "application": application["application"], "extensions": [], "locals": locals, "loop_control_slot_count": loop_control_slot_count, "value_temporary_slot_count": value_temporary_slot_count, "aggregate_names": aggregate_names, "string_names": string_names, "aggregate_core": aggregate_core}
 
 
 def native_direct_constant_id(state, kind, value):
@@ -548,14 +605,10 @@ def native_direct_lower_scalar_expression(state, expression, path):
 
 
 def native_direct_lower_condition(state, expression, path):
-    value = native_direct_lower_scalar_expression(state, expression, path)
-    if value["type"] == "i1":
-        return value
-    if value["type"] == "i32":
-        zero = native_direct_append_const_int(value["state"], 0, "i32")
-        condition = native_direct_append_instruction(zero["state"], "ne", "i1", {"args": [value["result"], zero["result"]]})
-        return {"state": condition["state"], "result": condition["result"], "type": "i1"}
-    fail("direct-native lowering rejected code=condition-type-not-lowered;position=" + path)
+    value_slot = native_direct_value_temporary_pair_slot(state, 0, 0, path)
+    state = native_direct_lower_value_into_slot(state, expression, value_slot, path, 1)
+    condition = native_direct_append_instruction(state, "direct_slot_truthy", "i1", {"args": [value_slot]})
+    return {"state": condition["state"], "result": condition["result"], "type": "i1"}
 
 
 def native_direct_lower_print_statement(state, statement, path):
@@ -572,20 +625,16 @@ def native_direct_lower_print_statement(state, statement, path):
             state = native_direct_append_write(state, " ")
         if literal["ok"]:
             state = native_direct_append_write(state, literal["value"])
-        elif argument["kind"] == "var" and native_direct_local_is_owned(state, argument["value"]):
+        elif argument["kind"] == "var":
             if not native_direct_name_in_list(state["initialized_locals"], argument["value"]):
                 fail("direct-native lowering rejected code=local-read-before-assignment;name=" + argument["value"] + ";position=" + path + ".arg[" + str(arg_idx) + "]")
             slot = native_direct_local_slot(state, argument["value"])
             printed = native_direct_append_instruction(state, "direct_print_string_slot", "i32", {"args": [slot]})
             state = printed["state"]
         else:
-            value = native_direct_lower_scalar_expression(state, argument, path + ".arg[" + str(arg_idx) + "]")
-            print_operation = "print_int"
-            if value["type"] == "i1":
-                print_operation = "print_bool"
-            elif value["type"] != "i32":
-                fail("direct-native lowering rejected code=print-type-not-lowered;position=" + path + ".arg[" + str(arg_idx) + "]")
-            printed = native_direct_append_instruction(value["state"], print_operation, "i32", {"args": [value["result"]]})
+            value_slot = native_direct_value_temporary_pair_slot(state, 0, 0, path + ".arg[" + str(arg_idx) + "]")
+            state = native_direct_lower_value_into_slot(state, argument, value_slot, path + ".arg[" + str(arg_idx) + "]", 1)
+            printed = native_direct_append_instruction(state, "direct_print_string_slot", "i32", {"args": [value_slot]})
             state = printed["state"]
         arg_idx = arg_idx + 1
     return native_direct_append_write(state, "\n")
@@ -1319,17 +1368,59 @@ def native_direct_lower_for_statement(state, statement, path):
 
 
 def native_direct_value_temporary_slot(state, depth, path):
-    slot_idx = depth + depth
+    slot_idx = depth * 4
     if depth < 0 or slot_idx >= len(state["value_temporary_slots"]):
         fail("direct-native lowering rejected code=value-temporary-slot-underflow;depth=" + str(depth) + ";position=" + path)
     return state["value_temporary_slots"][slot_idx]
 
 
 def native_direct_value_temporary_pair_slot(state, depth, pair_index, path):
-    slot_idx = depth + depth + pair_index
-    if depth < 0 or pair_index < 0 or pair_index > 1 or slot_idx >= len(state["value_temporary_slots"]):
+    slot_idx = depth * 4 + pair_index
+    if depth < 0 or pair_index < 0 or pair_index > 3 or slot_idx >= len(state["value_temporary_slots"]):
         fail("direct-native lowering rejected code=value-temporary-pair-slot-underflow;depth=" + str(depth) + ";pair=" + str(pair_index) + ";position=" + path)
     return state["value_temporary_slots"][slot_idx]
+
+
+def native_direct_lower_short_circuit_into_slot(state, expression, destination_slot, path, temporary_depth):
+    left_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 0, path + ".left")
+    state = native_direct_lower_value_into_slot(state, expression["left"], left_slot, path + ".left", temporary_depth + 1)
+    truthy = native_direct_append_instruction(state, "direct_slot_truthy", "i1", {"args": [left_slot]})
+    state = truthy["state"]
+    first_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_branch(truthy["result"], first_block, -1))
+    condition_block = state["current_block"]
+    state = native_direct_begin_next_block(state)
+    if expression["op"] == "and":
+        right_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 1, path + ".right")
+        state = native_direct_lower_value_into_slot(state, expression["right"], right_slot, path + ".right", temporary_depth + 1)
+        right_truthy = native_direct_append_instruction(state, "direct_slot_truthy", "i1", {"args": [right_slot]})
+        stored = native_direct_append_instruction(right_truthy["state"], "direct_slot_set_bool_owned", "slot_ptr", {"args": [destination_slot, right_truthy["result"]]})
+        state = stored["state"]
+    else:
+        stored = native_direct_append_instruction(state, "direct_slot_set_bool_owned", "slot_ptr", {"args": [destination_slot, truthy["result"]]})
+        state = stored["state"]
+    first_exit = state["current_block"]
+    state = native_direct_finish_block(state, native_ir_v2_jump(-1))
+
+    second_block = state["next_block"]
+    state = native_direct_patch_branch_false_target(state, condition_block, second_block)
+    state = native_direct_begin_next_block(state)
+    if expression["op"] == "and":
+        stored = native_direct_append_instruction(state, "direct_slot_set_bool_owned", "slot_ptr", {"args": [destination_slot, truthy["result"]]})
+        state = stored["state"]
+    else:
+        right_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 1, path + ".right")
+        state = native_direct_lower_value_into_slot(state, expression["right"], right_slot, path + ".right", temporary_depth + 1)
+        right_truthy = native_direct_append_instruction(state, "direct_slot_truthy", "i1", {"args": [right_slot]})
+        stored = native_direct_append_instruction(right_truthy["state"], "direct_slot_set_bool_owned", "slot_ptr", {"args": [destination_slot, right_truthy["result"]]})
+        state = stored["state"]
+    second_exit = state["current_block"]
+    state = native_direct_finish_block(state, native_ir_v2_jump(-1))
+
+    merge_block = state["next_block"]
+    state = native_direct_patch_jump_target(state, first_exit, merge_block)
+    state = native_direct_patch_jump_target(state, second_exit, merge_block)
+    return native_direct_begin_next_block(state)
 
 
 def native_direct_lower_value_into_slot(state, expression, destination_slot, path, temporary_depth):
@@ -1356,7 +1447,7 @@ def native_direct_lower_value_into_slot(state, expression, destination_slot, pat
             operation = "direct_slot_set_bool_owned"
         stored = native_direct_append_instruction(value["state"], operation, "slot_ptr", {"args": [destination_slot, value["result"]]})
         return stored["state"]
-    if kind == "var" and native_direct_local_is_owned(state, expression["value"]):
+    if kind == "var":
         if not native_direct_name_in_list(state["initialized_locals"], expression["value"]):
             fail("direct-native lowering rejected code=local-read-before-assignment;name=" + expression["value"] + ";position=" + path)
         source_slot = native_direct_local_slot(state, expression["value"])
@@ -1386,6 +1477,42 @@ def native_direct_lower_value_into_slot(state, expression, destination_slot, pat
             state = inserted["state"]
             entry_idx = entry_idx + 1
         return state
+    if kind == "binary" and (expression["op"] == "and" or expression["op"] == "or"):
+        return native_direct_lower_short_circuit_into_slot(state, expression, destination_slot, path, temporary_depth)
+    if kind == "binary":
+        left_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 0, path + ".left")
+        right_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 1, path + ".right")
+        state = native_direct_lower_value_into_slot(state, expression["left"], left_slot, path + ".left", temporary_depth + 1)
+        state = native_direct_lower_value_into_slot(state, expression["right"], right_slot, path + ".right", temporary_depth + 1)
+        lowered = native_direct_append_instruction(state, "direct_slot_binary", "i32", {"args": [destination_slot, left_slot, right_slot], "operator": expression["op"]})
+        return lowered["state"]
+    if kind == "unary":
+        value_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 0, path + ".value")
+        state = native_direct_lower_value_into_slot(state, expression["value"], value_slot, path + ".value", temporary_depth + 1)
+        lowered = native_direct_append_instruction(state, "direct_slot_unary", "i32", {"args": [destination_slot, value_slot], "operator": expression["op"]})
+        return lowered["state"]
+    if kind == "index":
+        receiver_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 0, path + ".receiver")
+        index_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 1, path + ".index")
+        state = native_direct_lower_value_into_slot(state, expression["receiver"], receiver_slot, path + ".receiver", temporary_depth + 1)
+        state = native_direct_lower_value_into_slot(state, expression["index"], index_slot, path + ".index", temporary_depth + 1)
+        lowered = native_direct_append_instruction(state, "direct_slot_index", "i32", {"args": [destination_slot, receiver_slot, index_slot]})
+        return lowered["state"]
+    if kind == "slice":
+        receiver_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 0, path + ".receiver")
+        start_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 1, path + ".start")
+        stop_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 2, path + ".stop")
+        state = native_direct_lower_value_into_slot(state, expression["receiver"], receiver_slot, path + ".receiver", temporary_depth + 1)
+        state = native_direct_lower_value_into_slot(state, expression["start"], start_slot, path + ".start", temporary_depth + 1)
+        state = native_direct_lower_value_into_slot(state, expression["stop"], stop_slot, path + ".stop", temporary_depth + 1)
+        lowered = native_direct_append_instruction(state, "direct_slot_slice", "i32", {"args": [destination_slot, receiver_slot, start_slot, stop_slot]})
+        return lowered["state"]
+    if kind == "call" and expression["callee"]["kind"] == "var" and expression["callee"]["value"] == "len" and len(expression["args"]) == 1:
+        argument_slot = native_direct_value_temporary_pair_slot(state, temporary_depth, 0, path + ".arg[0]")
+        state = native_direct_lower_value_into_slot(state, expression["args"][0], argument_slot, path + ".arg[0]", temporary_depth + 1)
+        length = native_direct_append_instruction(state, "direct_iterable_count", "i32", {"args": [argument_slot]})
+        stored = native_direct_append_instruction(length["state"], "direct_slot_set_int_owned", "slot_ptr", {"args": [destination_slot, length["result"]]})
+        return stored["state"]
     value = native_direct_lower_scalar_expression(state, expression, path)
     if value["type"] != "i32":
         fail("direct-native lowering rejected code=assignment-type-not-lowered;position=" + path)

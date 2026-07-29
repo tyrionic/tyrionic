@@ -61,6 +61,12 @@ def native_direct_collect_statement_locals(items, locals):
             locals = native_direct_collect_statement_locals(statement["else_body"], locals)
         elif statement["kind"] == "while":
             locals = native_direct_collect_statement_locals(statement["body"], locals)
+        elif statement["kind"] == "for":
+            target_idx = 0
+            while target_idx < len(statement["targets"]):
+                locals = native_direct_append_local(locals, statement["targets"][target_idx])
+                target_idx = target_idx + 1
+            locals = native_direct_collect_statement_locals(statement["body"], locals)
         idx = idx + 1
     return locals
 
@@ -69,13 +75,33 @@ def native_direct_collect_locals(program):
     return native_direct_collect_statement_locals(program["items"], [])
 
 
+def native_direct_count_for_statements(items):
+    count = 0
+    idx = 0
+    while idx < len(items):
+        statement = items[idx]
+        if statement["kind"] == "if":
+            count = count + native_direct_count_for_statements(statement["body"])
+            branch_idx = 0
+            while branch_idx < len(statement["elifs"]):
+                count = count + native_direct_count_for_statements(statement["elifs"][branch_idx]["body"])
+                branch_idx = branch_idx + 1
+            count = count + native_direct_count_for_statements(statement["else_body"])
+        elif statement["kind"] == "while":
+            count = count + native_direct_count_for_statements(statement["body"])
+        elif statement["kind"] == "for":
+            count = count + 1 + native_direct_count_for_statements(statement["body"])
+        idx = idx + 1
+    return count
+
+
 def native_direct_plan(program, application, target):
     target = backend_require_operation(target, "native-ir-v2-direct")
     if application["contract"] != "tyrion-native-direct-analysis-v1":
         fail("direct-native lowering rejected code=analysis-contract")
     if application["program"] != program:
         fail("direct-native lowering rejected code=analysis-program-mismatch")
-    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "application": application["application"], "extensions": [], "locals": native_direct_collect_locals(program)}
+    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "application": application["application"], "extensions": [], "locals": native_direct_collect_locals(program), "range_loop_count": native_direct_count_for_statements(program["items"])}
 
 
 def native_direct_constant_id(state, kind, value):
@@ -130,6 +156,19 @@ def native_direct_patch_branch_false_target(state, block_id, target):
     return state
 
 
+def native_direct_patch_branch_true_target(state, block_id, target):
+    block = state["blocks"][block_id]
+    terminator = block["terminator"]
+    if terminator["op"] != "branch" or terminator["true_target"] != -1:
+        fail("direct-native lowering rejected code=branch-patch-state;block=" + str(block_id))
+    terminator["true_target"] = target
+    block["terminator"] = terminator
+    blocks = state["blocks"]
+    blocks[block_id] = block
+    state["blocks"] = blocks
+    return state
+
+
 def native_direct_patch_jump_target(state, block_id, target):
     block = state["blocks"][block_id]
     terminator = block["terminator"]
@@ -147,12 +186,12 @@ def native_direct_append_const_int(state, value, value_type):
     return native_direct_append_instruction(state, "const_int", value_type, {"value": value})
 
 
-def native_direct_append_write(state, payload):
+def native_direct_append_write_fd(state, fd_value, payload):
     if len(payload) == 0:
         return state
     constant = native_direct_constant_id(state, "bytes", payload)
     state = constant["state"]
-    fd = native_direct_append_const_int(state, 1, "i32")
+    fd = native_direct_append_const_int(state, fd_value, "i32")
     state = fd["state"]
     address = native_direct_append_instruction(state, "const_address", "ptr", {"constant_id": constant["id"]})
     state = address["state"]
@@ -160,6 +199,10 @@ def native_direct_append_write(state, payload):
     state = length["state"]
     call = native_direct_append_instruction(state, "call_external", "isize", {"name": "write", "args": [fd["result"], address["result"], length["result"]]})
     return call["state"]
+
+
+def native_direct_append_write(state, payload):
+    return native_direct_append_write_fd(state, 1, payload)
 
 
 def native_direct_literal_text(expr):
@@ -270,6 +313,13 @@ def native_direct_lower_scalar_expression(state, expression, path):
         zero = native_direct_append_const_int(inner["state"], 0, "i1")
         value = native_direct_append_instruction(zero["state"], "eq", "i1", {"args": [inner["result"], zero["result"]]})
         return {"state": value["state"], "result": value["result"], "type": "i1"}
+    if kind == "unary" and expression["op"] == "-":
+        inner = native_direct_lower_scalar_expression(state, expression["value"], path + ".value")
+        if inner["type"] != "i32":
+            fail("direct-native lowering rejected code=unary-type-not-lowered;position=" + path)
+        zero = native_direct_append_const_int(inner["state"], 0, "i32")
+        value = native_direct_append_instruction(zero["state"], "sub", "i32", {"args": [zero["result"], inner["result"]]})
+        return {"state": value["state"], "result": value["result"], "type": "i32"}
     fail("direct-native lowering rejected code=expression-not-lowered;kind=" + kind + ";position=" + path)
 
 
@@ -319,7 +369,7 @@ def native_direct_lower_statements(state, statements, path):
 
 
 def native_direct_push_loop(state, continue_target):
-    context = {"continue_target": continue_target, "break_blocks": []}
+    context = {"continue_target": continue_target, "break_blocks": [], "continue_blocks": []}
     state["loop_contexts"] = method_append(state["loop_contexts"], context)
     return state
 
@@ -331,6 +381,18 @@ def native_direct_record_loop_break(state, block_id):
     contexts = state["loop_contexts"]
     context = contexts[context_idx]
     context["break_blocks"] = method_append(context["break_blocks"], block_id)
+    contexts[context_idx] = context
+    state["loop_contexts"] = contexts
+    return state
+
+
+def native_direct_record_loop_continue(state, block_id):
+    context_idx = len(state["loop_contexts"]) - 1
+    if context_idx < 0:
+        fail("direct-native lowering rejected code=continue-outside-loop")
+    contexts = state["loop_contexts"]
+    context = contexts[context_idx]
+    context["continue_blocks"] = method_append(context["continue_blocks"], block_id)
     contexts[context_idx] = context
     state["loop_contexts"] = contexts
     return state
@@ -364,7 +426,9 @@ def native_direct_lower_continue_statement(state):
     if context_idx < 0:
         fail("direct-native lowering rejected code=continue-outside-loop")
     context = state["loop_contexts"][context_idx]
-    return native_direct_finish_block(state, native_ir_v2_jump(context["continue_target"]))
+    block_id = state["current_block"]
+    state = native_direct_finish_block(state, native_ir_v2_jump(context["continue_target"]))
+    return native_direct_record_loop_continue(state, block_id)
 
 
 def native_direct_lower_if_statement(state, statement, path):
@@ -463,6 +527,130 @@ def native_direct_lower_while_statement(state, statement, path):
     return state
 
 
+def native_direct_lower_range_arguments(state, expression, path):
+    if expression["kind"] != "call" or expression["callee"]["kind"] != "var" or expression["callee"]["value"] != "range":
+        fail("direct-native lowering rejected code=for-iterator-not-lowered;position=" + path)
+    args = expression["args"]
+    if len(args) < 1 or len(args) > 3:
+        fail("direct-native lowering rejected code=range-arity;arity=" + str(len(args)) + ";position=" + path)
+    arg_idx = 0
+    lowered = []
+    while arg_idx < len(args):
+        if args[arg_idx]["kind"] == "kwarg":
+            fail("direct-native lowering rejected code=range-keyword-not-lowered;position=" + path + ".arg[" + str(arg_idx) + "]")
+        value = native_direct_lower_scalar_expression(state, args[arg_idx], path + ".arg[" + str(arg_idx) + "]")
+        state = value["state"]
+        if value["type"] != "i32":
+            fail("direct-native lowering rejected code=range-argument-type-not-lowered;position=" + path + ".arg[" + str(arg_idx) + "]")
+        lowered = method_append(lowered, value["result"])
+        arg_idx = arg_idx + 1
+    if len(lowered) == 1:
+        start = native_direct_append_const_int(state, 0, "i32")
+        state = start["state"]
+        step = native_direct_append_const_int(state, 1, "i32")
+        return {"state": step["state"], "start": start["result"], "stop": lowered[0], "step": step["result"]}
+    if len(lowered) == 2:
+        step = native_direct_append_const_int(state, 1, "i32")
+        return {"state": step["state"], "start": lowered[0], "stop": lowered[1], "step": step["result"]}
+    return {"state": state, "start": lowered[0], "stop": lowered[1], "step": lowered[2]}
+
+
+def native_direct_lower_for_statement(state, statement, path):
+    if len(statement["targets"]) != 1:
+        fail("direct-native lowering rejected code=for-target-not-lowered;count=" + str(len(statement["targets"])) + ";position=" + path)
+    incoming_initialized = state["initialized_locals"]
+    target_name = statement["targets"][0]
+    range_slot_idx = state["next_range_slot"]
+    if range_slot_idx >= len(state["range_slots"]):
+        fail("direct-native lowering rejected code=range-slot-underflow;position=" + path)
+    state["next_range_slot"] = range_slot_idx + 1
+    range_slot = state["range_slots"][range_slot_idx]
+    arguments = native_direct_lower_range_arguments(state, statement["iterable"], path + ".iterable")
+    state = arguments["state"]
+    target_slot = native_direct_local_slot(state, target_name)
+    stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [range_slot, arguments["start"]]})
+    state = stored["state"]
+
+    condition_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_jump(condition_block))
+    state = native_direct_begin_next_block(state)
+    zero = native_direct_append_const_int(state, 0, "i32")
+    state = zero["state"]
+    zero_step = native_direct_append_instruction(state, "eq", "i1", {"args": [arguments["step"], zero["result"]]})
+    state = zero_step["state"]
+    zero_step_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_branch(zero_step["result"], zero_step_block, -1))
+
+    state = native_direct_begin_next_block(state)
+    state = native_direct_append_write_fd(state, 2, "range() arg 3 must not be zero\n")
+    failure = native_direct_append_const_int(state, 3, "i32")
+    state = native_direct_finish_block(failure["state"], native_ir_v2_return(failure["result"]))
+
+    sign_block = state["next_block"]
+    state = native_direct_patch_branch_false_target(state, condition_block, sign_block)
+    state = native_direct_begin_next_block(state)
+    sign_zero = native_direct_append_const_int(state, 0, "i32")
+    state = sign_zero["state"]
+    positive = native_direct_append_instruction(state, "gt", "i1", {"args": [arguments["step"], sign_zero["result"]]})
+    state = positive["state"]
+    positive_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_branch(positive["result"], positive_block, positive_block + 1))
+
+    state = native_direct_begin_next_block(state)
+    positive_value = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [range_slot]})
+    state = positive_value["state"]
+    positive_condition = native_direct_append_instruction(state, "lt", "i1", {"args": [positive_value["result"], arguments["stop"]]})
+    positive_condition_block = state["current_block"]
+    state = native_direct_finish_block(positive_condition["state"], native_ir_v2_branch(positive_condition["result"], -1, -1))
+
+    state = native_direct_begin_next_block(state)
+    negative_value = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [range_slot]})
+    state = negative_value["state"]
+    negative_condition = native_direct_append_instruction(state, "gt", "i1", {"args": [negative_value["result"], arguments["stop"]]})
+    negative_condition_block = state["current_block"]
+    body_block = state["next_block"]
+    state = native_direct_finish_block(negative_condition["state"], native_ir_v2_branch(negative_condition["result"], body_block, -1))
+    state = native_direct_patch_branch_true_target(state, positive_condition_block, body_block)
+
+    state = native_direct_begin_next_block(state)
+    iteration_value = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [range_slot]})
+    state = iteration_value["state"]
+    iteration_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [target_slot, iteration_value["result"]]})
+    state = native_direct_mark_local_initialized(iteration_stored["state"], target_name)
+    state = native_direct_push_loop(state, -1)
+    state = native_direct_lower_statements(state, statement["body"], path + ".body")
+    popped = native_direct_pop_loop(state)
+    state = popped["state"]
+    context = popped["context"]
+    has_increment = not state["terminated"] or len(context["continue_blocks"]) > 0
+    if has_increment:
+        increment_block = state["next_block"]
+        if not state["terminated"]:
+            state = native_direct_finish_block(state, native_ir_v2_jump(increment_block))
+        continue_idx = 0
+        while continue_idx < len(context["continue_blocks"]):
+            state = native_direct_patch_jump_target(state, context["continue_blocks"][continue_idx], increment_block)
+            continue_idx = continue_idx + 1
+        state = native_direct_begin_next_block(state)
+        current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [range_slot]})
+        state = current["state"]
+        next_value = native_direct_append_instruction(state, "add", "i32", {"args": [current["result"], arguments["step"]]})
+        state = next_value["state"]
+        next_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [range_slot, next_value["result"]]})
+        state = native_direct_finish_block(next_stored["state"], native_ir_v2_jump(condition_block))
+
+    exit_block = state["next_block"]
+    state = native_direct_patch_branch_false_target(state, positive_condition_block, exit_block)
+    state = native_direct_patch_branch_false_target(state, negative_condition_block, exit_block)
+    break_idx = 0
+    while break_idx < len(context["break_blocks"]):
+        state = native_direct_patch_jump_target(state, context["break_blocks"][break_idx], exit_block)
+        break_idx = break_idx + 1
+    state = native_direct_begin_next_block(state)
+    state["initialized_locals"] = incoming_initialized
+    return state
+
+
 def native_direct_lower_statement(state, statement, path):
     if statement["kind"] == "assign" and statement["target"]["kind"] == "var":
         value = native_direct_lower_scalar_expression(state, statement["value"], path + ".value")
@@ -475,6 +663,8 @@ def native_direct_lower_statement(state, statement, path):
         return native_direct_lower_if_statement(state, statement, path)
     if statement["kind"] == "while":
         return native_direct_lower_while_statement(state, statement, path)
+    if statement["kind"] == "for":
+        return native_direct_lower_for_statement(state, statement, path)
     if statement["kind"] == "break":
         return native_direct_lower_break_statement(state)
     if statement["kind"] == "continue":
@@ -485,7 +675,7 @@ def native_direct_lower_statement(state, statement, path):
 def native_direct_module_from_plan(plan):
     if plan["contract"] != "tyrion-native-direct-plan-v1":
         fail("direct-native lowering rejected code=plan-contract")
-    state = {"blocks": [], "current_block": 0, "next_block": 1, "instructions": [], "constants": [], "next_result": 0, "locals": [], "initialized_locals": [], "loop_contexts": [], "terminated": False}
+    state = {"blocks": [], "current_block": 0, "next_block": 1, "instructions": [], "constants": [], "next_result": 0, "locals": [], "initialized_locals": [], "loop_contexts": [], "range_slots": [], "next_range_slot": 0, "terminated": False}
     local_idx = 0
     while local_idx < len(plan["locals"]):
         allocated = native_direct_append_instruction(state, "slot_alloc", "slot_ptr", {"args": []})
@@ -494,11 +684,19 @@ def native_direct_module_from_plan(plan):
         state = zeroed["state"]
         state["locals"] = method_append(state["locals"], {"name": plan["locals"][local_idx]["name"], "slot": zeroed["result"]})
         local_idx = local_idx + 1
+    range_slot_idx = 0
+    while range_slot_idx < plan["range_loop_count"]:
+        allocated = native_direct_append_instruction(state, "slot_alloc", "slot_ptr", {"args": []})
+        state = allocated["state"]
+        zeroed = native_direct_append_instruction(state, "slot_zero", "slot_ptr", {"args": [allocated["result"]]})
+        state = zeroed["state"]
+        state["range_slots"] = method_append(state["range_slots"], zeroed["result"])
+        range_slot_idx = range_slot_idx + 1
     state = native_direct_lower_statements(state, plan["program"]["items"], "program")
     exit_value = native_direct_append_const_int(state, 0, "i32")
     state = exit_value["state"]
     state = native_direct_finish_block(state, native_ir_v2_return(exit_value["result"]))
-    frame = native_ir_v2_frame(len(plan["locals"]), 0, 0, state["next_result"])
+    frame = native_ir_v2_frame(len(plan["locals"]), plan["range_loop_count"], 0, state["next_result"])
     function = native_ir_v2_function(0, "main", "public", [], "i32", frame, state["blocks"])
     function["effects"] = ["io"]
     functions = []

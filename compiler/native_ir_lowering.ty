@@ -1447,6 +1447,12 @@ def native_direct_lower_value_into_slot(state, expression, destination_slot, pat
             operation = "direct_slot_set_bool_owned"
         stored = native_direct_append_instruction(value["state"], operation, "slot_ptr", {"args": [destination_slot, value["result"]]})
         return stored["state"]
+    if kind == "float":
+        constant = native_direct_constant_id(state, "bytes", str(expression["value"]))
+        state = constant["state"]
+        address = native_direct_append_instruction(state, "const_address", "ptr", {"constant_id": constant["id"]})
+        stored = native_direct_append_instruction(address["state"], "direct_slot_set_float_text", "slot_ptr", {"args": [destination_slot, address["result"]]})
+        return stored["state"]
     if kind == "var":
         if not native_direct_name_in_list(state["initialized_locals"], expression["value"]):
             fail("direct-native lowering rejected code=local-read-before-assignment;name=" + expression["value"] + ";position=" + path)

@@ -3019,3 +3019,27 @@ def native_ir_v2_frame_overflow_probe():
     blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(0)))
     module = native_ir_v2_probe_module(blocks, 268435456)
     return verify_native_ir(module)
+
+
+def native_ir_v2_uninitialized_merge_probe():
+    entry = []
+    entry.append(native_ir_v2_instruction(0, "slot_alloc", "slot_ptr", {"args": []}))
+    entry.append(native_ir_v2_instruction(1, "slot_zero", "slot_ptr", {"args": [0]}))
+    entry.append(native_ir_v2_const_int(2, 1, "i1"))
+    initialized = []
+    initialized.append(native_ir_v2_const_int(3, 42, "i32"))
+    initialized.append(native_ir_v2_instruction(4, "slot_set_int", "slot_ptr", {"args": [1, 3]}))
+    merge = []
+    merge.append(native_ir_v2_instruction(5, "slot_get_int", "i32", {"args": [1]}))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, entry, native_ir_v2_branch(2, 1, 2)))
+    blocks.append(native_ir_v2_block(1, initialized, native_ir_v2_jump(3)))
+    blocks.append(native_ir_v2_block(2, [], native_ir_v2_jump(3)))
+    blocks.append(native_ir_v2_block(3, merge, native_ir_v2_return(5)))
+    module = native_ir_v2_probe_module(blocks, 6)
+    functions = module["functions"]
+    function = functions[0]
+    function["frame"] = native_ir_v2_frame(1, 0, 0, 6)
+    functions[0] = function
+    module["functions"] = functions
+    return verify_native_ir(module)

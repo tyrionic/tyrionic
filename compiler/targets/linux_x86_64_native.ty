@@ -643,17 +643,34 @@ def x86_native_emit_instruction(out, instruction, instructions, index):
         out = x86_native_line(out, "movl " + x86_native_stack_operand(args[0]) + ", %edi")
         out = x86_native_line(out, "call __tyrion_direct_print_int")
         return x86_native_line(out, "movq %rax, " + result_slot)
-    if op == "add" or op == "sub":
+    if op == "print_bool":
+        out = x86_native_line(out, "movl " + x86_native_stack_operand(args[0]) + ", %edi")
+        out = x86_native_line(out, "call __tyrion_direct_print_bool")
+        return x86_native_line(out, "movq %rax, " + result_slot)
+    if op == "add" or op == "sub" or op == "mul":
         out = x86_native_line(out, "movq " + x86_native_stack_operand(args[0]) + ", %rax")
         if op == "add":
             out = x86_native_line(out, "addq " + x86_native_stack_operand(args[1]) + ", %rax")
-        else:
+        elif op == "sub":
             out = x86_native_line(out, "subq " + x86_native_stack_operand(args[1]) + ", %rax")
+        else:
+            out = x86_native_line(out, "imulq " + x86_native_stack_operand(args[1]) + ", %rax")
         return x86_native_line(out, "movq %rax, " + result_slot)
-    if op == "eq":
+    if op == "eq" or op == "ne" or op == "lt" or op == "le" or op == "gt" or op == "ge":
         out = x86_native_line(out, "movq " + x86_native_stack_operand(args[0]) + ", %rax")
         out = x86_native_line(out, "cmpq " + x86_native_stack_operand(args[1]) + ", %rax")
-        out = x86_native_line(out, "sete %al")
+        condition = "e"
+        if op == "ne":
+            condition = "ne"
+        elif op == "lt":
+            condition = "l"
+        elif op == "le":
+            condition = "le"
+        elif op == "gt":
+            condition = "g"
+        elif op == "ge":
+            condition = "ge"
+        out = x86_native_line(out, "set" + condition + " %al")
         out = x86_native_line(out, "movzbl %al, %eax")
         return x86_native_line(out, "movq %rax, " + result_slot)
     if op == "argv_at":
@@ -15970,6 +15987,26 @@ def x86_native_emit_v2_print_runtime(out):
     return out
 
 
+def x86_native_emit_v2_print_bool_runtime(out):
+    out = asm_writer_append(out, "__tyrion_direct_print_bool:\n")
+    out = x86_native_line(out, "pushq %rbp")
+    out = x86_native_line(out, "movq %rsp, %rbp")
+    out = x86_native_line(out, "testl %edi, %edi")
+    out = x86_native_line(out, "je .L_tyrion_direct_print_bool_false")
+    out = x86_native_line(out, "leaq .L_tyrion_direct_bool_true(%rip), %rsi")
+    out = x86_native_line(out, "movl $4, %edx")
+    out = x86_native_line(out, "jmp .L_tyrion_direct_print_bool_write")
+    out = asm_writer_append(out, ".L_tyrion_direct_print_bool_false:\n")
+    out = x86_native_line(out, "leaq .L_tyrion_direct_bool_false(%rip), %rsi")
+    out = x86_native_line(out, "movl $5, %edx")
+    out = asm_writer_append(out, ".L_tyrion_direct_print_bool_write:\n")
+    out = x86_native_line(out, "movl $1, %edi")
+    out = x86_native_line(out, "call write@PLT")
+    out = x86_native_line(out, "leave")
+    out = x86_native_line(out, "ret")
+    return out
+
+
 def emit_linux_x86_64_native_v2_module_asm_into(out, module):
     module = verify_native_ir_v2(module)
     out = asm_writer_append(out, "# tyrion-native-ir-v2 target=x86_64-linux execution=direct\n")
@@ -15985,6 +16022,8 @@ def emit_linux_x86_64_native_v2_module_asm_into(out, module):
         function_idx = function_idx + 1
     if x86_native_module_has_operation(module, "print_int"):
         out = x86_native_emit_v2_print_runtime(out)
+    if x86_native_module_has_operation(module, "print_bool"):
+        out = x86_native_emit_v2_print_bool_runtime(out)
     if len(module["constants"]) > 0:
         out = asm_writer_append(out, ".section .rodata\n")
     constant_idx = 0
@@ -15996,6 +16035,9 @@ def emit_linux_x86_64_native_v2_module_asm_into(out, module):
         constant_idx = constant_idx + 1
     if x86_native_module_has_operation(module, "print_int"):
         out = asm_writer_append(out, ".L_tyrion_direct_int_format:\n.asciz \"%d\"\n")
+    if x86_native_module_has_operation(module, "print_bool"):
+        out = asm_writer_append(out, ".L_tyrion_direct_bool_true:\n.ascii \"True\"\n")
+        out = asm_writer_append(out, ".L_tyrion_direct_bool_false:\n.ascii \"False\"\n")
     return out
 
 

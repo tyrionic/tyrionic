@@ -13316,7 +13316,11 @@ def native_runtime_direct_strings_text():
     text = text + "    cmp w9, #2\n    b.ne __tyrion_app_add_fail\n    cmp w10, #2\n    b.ne __tyrion_app_add_fail\n"
     text = text + "    ldr x9, [x20]\n    ldr x10, [x21]\n    cmp x22, #0\n    b.eq __tyrion_app_numeric_int_add\n"
     text = text + "    cmp x22, #1\n    b.eq __tyrion_app_numeric_int_sub\n    cmp x22, #2\n    b.eq __tyrion_app_numeric_int_mul\n"
-    text = text + "    cmp x22, #3\n    b.ne __tyrion_app_add_fail\n    cbz x10, __tyrion_app_add_fail\n"
+    text = text + "    cmp x22, #3\n    b.eq __tyrion_app_numeric_int_div\n"
+    text = text + "    cmp x22, #4\n    b.ne __tyrion_app_add_fail\n    cbz x10, __tyrion_app_add_fail\n"
+    text = text + "    sdiv x11, x9, x10\n    msub x9, x11, x10, x9\n"
+    text = text + "    b __tyrion_app_numeric_int_store\n"
+    text = text + "__tyrion_app_numeric_int_div:\n    cbz x10, __tyrion_app_add_fail\n"
     text = text + "    sdiv x9, x9, x10\n    b __tyrion_app_numeric_int_store\n"
     text = text + "__tyrion_app_numeric_int_add:\n    add x9, x9, x10\n    b __tyrion_app_numeric_int_store\n"
     text = text + "__tyrion_app_numeric_int_sub:\n    sub x9, x9, x10\n    b __tyrion_app_numeric_int_store\n"
@@ -15176,6 +15180,7 @@ def emit_native_runtime_direct_data_expression_ops(out, target):
     binary_code_12 = binary_code_12 + "    cbz w0, 1f\n    ldr x0, [sp]\n    bl __tyrion_app_truthy\n"
     binary_code_12 = binary_code_12 + "1:\n    ldr x13, [sp, #8]\n    add sp, sp, #16\n"
     binary_code_12 = binary_code_12 + "    str x0, [x13]\n    mov w9, #3\n    strb w9, [x13, #127]\n"
+    binary_code_13 = numeric_code + "4" + numeric_code_tail
     out = asm_cstr(out, "L_native_runtime_direct_expr_pair_a", expr_pair_a)
     out = asm_cstr(out, "L_native_runtime_direct_expr_pair_b", expr_pair_b)
     out = asm_cstr(out, "L_native_runtime_direct_expr_unary_minus", expr_unary_minus)
@@ -15206,6 +15211,7 @@ def emit_native_runtime_direct_data_expression_ops(out, target):
     out = asm_cstr(out, "L_native_runtime_direct_binary_code_" + str(application_binary_operator_id_at(10)), binary_code_10)
     out = asm_cstr(out, "L_native_runtime_direct_binary_code_" + str(application_binary_operator_id_at(11)), binary_code_11)
     out = asm_cstr(out, "L_native_runtime_direct_binary_code_" + str(application_binary_operator_id_at(12)), binary_code_12)
+    out = asm_cstr(out, "L_native_runtime_direct_binary_code_" + str(application_binary_operator_id_at(13)), binary_code_13)
     out = asm_line(out, ".p2align 2")
     return out
 
@@ -15816,6 +15822,7 @@ def emit_native_ast_arena_runtime(out, target):
     handle_parent_x24 = generated_ast_handle_parent_mem("x24")
     value_tag_x20 = generated_value_tag_mem("x20")
     value_tag_x21 = generated_value_tag_mem("x21")
+    value_owner_x21 = generated_value_owner_mem("x21")
 
     asm_label(out, "L_native_ast_arena_init")
     asm_line(out, "stp x29, x30, [sp, #-48]!")
@@ -17271,6 +17278,8 @@ def emit_native_ast_arena_runtime(out, target):
     asm_line(out, "str x9, [x21, #8]")
     asm_line(out, "mov w9, #11")
     asm_line(out, "strb w9, " + value_tag_x21)
+    asm_line(out, "mov w9, #1")
+    asm_line(out, "strb w9, " + value_owner_x21)
     asm_line(out, "str xzr, [sp, #104]")
     asm_line(out, "mov w0, #1")
     asm_line(out, "b L_native_ast_compiler_spec_cleanup")

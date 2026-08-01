@@ -182,6 +182,7 @@ const char* tyext_rand_call_v1(const char* op, const char* payload) {
     if (!random_u64(&value)) {
       return NULL;
     }
+    value &= (uint64_t)INT64_MAX;
     snprintf(out_small, sizeof(out_small), "%llu", (unsigned long long)value);
     return out_small;
   }

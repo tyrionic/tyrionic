@@ -144,16 +144,18 @@ def cli_route_records_to_spec(records):
         spec["out_flag"] = "--out"
     return spec
 
+def compiler_cli_artifact_text(target):
+    if target["backend"] == "linux-x86_64":
+        return "tyrion-bootstrap-native v0\nnative-build-target-kind=compiler-cli\nnative-ir-contract=tyrion-native-ir-v2\nnative-lowering-plan=tyrion-native-direct-plan-v1\nnative-exec-mode=native-ir-v2-direct\n"
+    return "tyrion-bootstrap-native v0\nnative-build-target-kind=compiler-cli\nnative-exec-mode=compiler-cli-direct\n"
+
 def build_compiler_cli_native(program, input_path, output_path):
     target = host_target()
     artifact_path = output_path + ".tyn"
     asm_path = output_path + ".s"
     asm_writer = asm_writer_open(asm_path)
-    if target["backend"] == "linux-x86_64":
-        # Descendant x86 compilers use the same source-derived native IR route
-        # as the seed promotion. The compatibility section graph models
-        # AArch64 registers and must never be emitted into an x86 generation.
-        asm_writer = emit_linux_x86_64_native_program_asm_into(asm_writer, program)
+    if host_target()["backend"] == "linux-x86_64":
+        asm_writer = emit_linux_x86_64_direct_program_asm_into(asm_writer, program, [])
     else:
         usage_text = compiler_usage_text()
         version_text = compiler_version_text()
@@ -162,7 +164,7 @@ def build_compiler_cli_native(program, input_path, output_path):
     asm_writer_close(asm_writer)
     # The sidecar is diagnostic metadata; compiler capability comes from the
     # streamed executable and strict artifact proofs, not a reconstructed IR.
-    write_text_file(artifact_path, "tyrion-bootstrap-native v0\nnative-build-target-kind=compiler-cli\nnative-exec-mode=compiler-cli-direct\n")
+    write_text_file(artifact_path, compiler_cli_artifact_text(target))
     if not link_asm(asm_path, output_path):
         fail("native-link rejected code=link-failed;path=" + asm_path + ";output=" + output_path)
     return True
@@ -172,9 +174,9 @@ def build_runtime_native_x86_program(program, output_path, extension_mode, exten
     asm_path = make_asm_path(output_path)
     extensions = static_extension_build_plan(program, extension_mode, extension_root)
     asm_writer = asm_writer_open(asm_path)
-    asm_writer = emit_linux_x86_64_native_program_extensions_asm_into(asm_writer, program, extensions)
+    asm_writer = emit_linux_x86_64_direct_program_asm_into(asm_writer, program, extensions)
     asm_writer_close(asm_writer)
-    artifact = "tyrion-runtime-native v1\nnative-build-target-kind=application\nnative-exec-mode=direct-native\n"
+    artifact = "tyrion-runtime-native v1\nnative-build-target-kind=application\nnative-ir-contract=tyrion-native-ir-v2\nnative-lowering-plan=tyrion-native-direct-plan-v1\nnative-exec-mode=native-ir-v2-direct\n"
     if len(extensions) > 0:
         artifact = artifact + "native-static-extension-count=" + str(len(extensions)) + "\n"
     write_text_file(artifact_path, artifact)
@@ -189,12 +191,13 @@ def build_runtime_native_program_if_needed(raw_source, program, input_path, outp
     # Backend emitters only receive accepted programs and therefore cannot
     # expose private lowering diagnostics.
     require_application_analysis(program, runtime_native_function_names(program))
-    if target["backend"] == "linux-x86_64":
+    if host_target()["backend"] == "linux-x86_64":
         # Applications and compiler descendants share the same verified native
         # IR path. Never route x86 applications through the historical
         # AArch64-shaped runtime translator.
         return build_runtime_native_x86_program(program, output_path, extension_mode, extension_root)
-    return build_runtime_native_direct_program_if_supported_configured(raw_source, input_path, output_path, extension_mode, extension_root)
+    else:
+        return build_runtime_native_direct_program_if_supported_configured(raw_source, input_path, output_path, extension_mode, extension_root)
 
 def build_native_configured(input_path, output_path, extension_mode, extension_root):
     raw_source = read_module_graph(input_path)

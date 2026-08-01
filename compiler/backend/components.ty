@@ -1486,12 +1486,14 @@ def emit_runtime_native_direct_expr(out, expr, dst, temp, plan, state):
             out = asm_line(out, "mov x1, x10")
             out = asm_line(out, "mov x2, x11")
             return asm_line(out, "bl __tyrion_app_add")
-        if operation_id == application_binary_operator_id("-") or operation_id == application_binary_operator_id("*") or operation_id == application_binary_operator_id("/"):
+        if operation_id == application_binary_operator_id("-") or operation_id == application_binary_operator_id("*") or operation_id == application_binary_operator_id("/") or operation_id == application_binary_operator_id("%"):
             operation = 1
             if operation_id == application_binary_operator_id("*"):
                 operation = 2
             elif operation_id == application_binary_operator_id("/"):
                 operation = 3
+            elif operation_id == application_binary_operator_id("%"):
+                operation = 4
             out = asm_line(out, "mov x0, x13")
             out = asm_line(out, "mov x1, x10")
             out = asm_line(out, "mov x2, x11")

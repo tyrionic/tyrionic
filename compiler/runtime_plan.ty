@@ -737,16 +737,16 @@ def runtime_native_direct_name_present(names, name):
     return application_name_present(names, name)
 
 def runtime_native_direct_expr_supported(expr, function_names):
-    return analyze_application_expr(expr, function_names, "expr")["ok"]
+    return analyze_application_expr(expr, application_name_index(function_names), "expr")["ok"]
 
 def runtime_native_direct_statements_have_control_exit(items):
     return application_statements_have_control_exit(items)
 
 def runtime_native_direct_statement_supported(stmt, function_names, in_function):
-    return analyze_application_statement(stmt, function_names, in_function, "stmt")["ok"]
+    return analyze_application_statement(stmt, application_name_index(function_names), in_function, "stmt")["ok"]
 
 def runtime_native_direct_statements_supported(items, function_names, in_function):
-    return analyze_application_statements(items, function_names, in_function, "statements")["ok"]
+    return analyze_application_statements(items, application_name_index(function_names), in_function, "statements")["ok"]
 
 def runtime_native_direct_program_supported(program):
     function_names = runtime_native_function_names(program)

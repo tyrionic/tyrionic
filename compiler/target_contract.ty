@@ -20,7 +20,7 @@ def target_spec(os_name, arch):
     symbol_prefix = ""
     linker = "clang"
     backend_status = "implemented"
-    capabilities = "core,collections,file,tcp,clock,process,compiler-file,compiler-writer,libc,compiler-cli,runtime-native"
+    capabilities = "core,collections,file,tcp,clock,process,compiler-file,compiler-writer,compiler-ast,libc,compiler-cli,runtime-native"
     operations = "section,label,global,call,branch,address,constant,prologue,epilogue,audit,link"
     if os_name == "darwin" and arch == "aarch64":
         backend = "darwin-aarch64"
@@ -216,7 +216,7 @@ def backend_primitive_implementation_keys(target):
     common = "len,int,str,range,file_open,wall_time,tcp_connect,tcp_write,tcp_read,tcp_close,"
     common = common + "read_text_file,read_module_graph,write_text_file,run_tool,writer_open,writer_append,"
     common = common + "writer_close,writer_bytes,writer_set_backend,writer_is_x86,"
-    common = common + "ast_builder_create,ast_builder_len,ast_builder_append,ast_builder_finish,ast_builder_get,token_builder_count,token_builder_append,token_builder_field,"
+    common = common + "ast_builder_create,ast_builder_len,ast_builder_append,ast_builder_finish,ast_builder_get,token_builder_count,token_builder_append,token_builder_field,lex,program_has_function,"
     common = common + "bool,enumerate,zip,sum,min,max,any,all,sorted,"
     common = common + "host_load,host_call,host_unload"
     if target["backend"] == "darwin-aarch64":

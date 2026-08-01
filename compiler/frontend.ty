@@ -229,6 +229,24 @@ def malformed_nested_ast_record_probe():
     return program_has_function(program, "fake")
 
 
+def parser_list_create():
+    return __tyrion_native_ast_builder_create()
+
+
+def parser_list_append(builder, value):
+    __tyrion_native_ast_builder_append(builder, 0, value)
+    return builder
+
+
+def parser_list_single(value):
+    builder = parser_list_create()
+    return parser_list_append(builder, value)
+
+
+def parser_list_finish(builder):
+    return __tyrion_native_ast_builder_finish(builder)[0]
+
+
 def malformed_ast_kind_probe():
     return ast_record("not_a_real_ast_kind")
 
@@ -480,13 +498,13 @@ def parse_pratt_expr(tokens, pos, min_bp):
             atom = {"node": ast_value("var", atom_text), "pos": pos + 1}
         elif atom_kind == "KW_LAMBDA":
             lambda_pos = pos + 1
-            params = []
+            params = parser_list_create()
             if lambda_pos < token_count(tokens) and token_kind_at(tokens, lambda_pos) != "COLON":
                 reading_params = True
                 while reading_params:
                     if token_kind_at(tokens, lambda_pos) != "IDENTIFIER":
                         fail("expected lambda parameter name")
-                    params = method_append(params, token_text_at(tokens, lambda_pos))
+                    params = parser_list_append(params, token_text_at(tokens, lambda_pos))
                     lambda_pos = lambda_pos + 1
                     if lambda_pos < token_count(tokens) and token_kind_at(tokens, lambda_pos) == "COMMA":
                         lambda_pos = lambda_pos + 1
@@ -494,10 +512,10 @@ def parse_pratt_expr(tokens, pos, min_bp):
                         reading_params = False
             lambda_pos = parser_expect(tokens, lambda_pos, "COLON")
             body = parse_expression(tokens, lambda_pos)
-            atom = {"node": ast_lambda(params, body["node"]), "pos": body["pos"]}
+            atom = {"node": ast_lambda(parser_list_finish(params), body["node"]), "pos": body["pos"]}
         elif atom_kind == "LBRACKET":
             list_pos = pos + 1
-            items = []
+            items = parser_list_create()
             if list_pos < token_count(tokens) and token_kind_at(tokens, list_pos) != "RBRACKET":
                 first = parse_expression(tokens, list_pos)
                 if first["pos"] < token_count(tokens) and token_kind_at(tokens, first["pos"]) == "KW_FOR":
@@ -515,23 +533,23 @@ def parse_pratt_expr(tokens, pos, min_bp):
                     list_pos = parser_expect(tokens, comp_pos, "RBRACKET")
                     atom = {"node": ast_comprehension("list", first["node"], ast_value("none", none), ast_value("none", none), target, iterable["node"], condition), "pos": list_pos}
                 else:
-                    items = method_append(items, first["node"])
+                    items = parser_list_append(items, first["node"])
                     list_pos = first["pos"]
                     while list_pos < token_count(tokens) and token_kind_at(tokens, list_pos) == "COMMA":
                         list_pos = list_pos + 1
                         if list_pos < token_count(tokens) and token_kind_at(tokens, list_pos) == "RBRACKET":
                             break
                         item = parse_expression(tokens, list_pos)
-                        items = method_append(items, item["node"])
+                        items = parser_list_append(items, item["node"])
                         list_pos = item["pos"]
                     list_pos = parser_expect(tokens, list_pos, "RBRACKET")
-                    atom = {"node": ast_collection("list", items), "pos": list_pos}
+                    atom = {"node": ast_collection("list", parser_list_finish(items)), "pos": list_pos}
             else:
                 list_pos = parser_expect(tokens, list_pos, "RBRACKET")
-                atom = {"node": ast_collection("list", items), "pos": list_pos}
+                atom = {"node": ast_collection("list", parser_list_finish(items)), "pos": list_pos}
         elif atom_kind == "LBRACE":
             brace_pos = pos + 1
-            entries = []
+            entries = parser_list_create()
             atom_set_done = False
             if brace_pos < token_count(tokens) and token_kind_at(tokens, brace_pos) != "RBRACE":
                 first = parse_expression(tokens, brace_pos)
@@ -553,7 +571,7 @@ def parse_pratt_expr(tokens, pos, min_bp):
                         atom = {"node": ast_comprehension("dict", ast_value("none", none), first["node"], value["node"], target, iterable["node"], condition), "pos": brace_pos}
                         atom_set_done = True
                     if not atom_set_done:
-                        entries = method_append(entries, ast_dict_entry(first["node"], value["node"]))
+                        entries = parser_list_append(entries, ast_dict_entry(first["node"], value["node"]))
                         brace_pos = value["pos"]
                         while brace_pos < token_count(tokens) and token_kind_at(tokens, brace_pos) == "COMMA":
                             brace_pos = brace_pos + 1
@@ -562,25 +580,25 @@ def parse_pratt_expr(tokens, pos, min_bp):
                             key = parse_expression(tokens, brace_pos)
                             brace_pos = parser_expect(tokens, key["pos"], "COLON")
                             value = parse_expression(tokens, brace_pos)
-                            entries = method_append(entries, ast_dict_entry(key["node"], value["node"]))
+                            entries = parser_list_append(entries, ast_dict_entry(key["node"], value["node"]))
                             brace_pos = value["pos"]
                         brace_pos = parser_expect(tokens, brace_pos, "RBRACE")
-                        atom = {"node": ast_dict(entries), "pos": brace_pos}
+                        atom = {"node": ast_dict(parser_list_finish(entries)), "pos": brace_pos}
                 else:
-                    items = [first["node"]]
+                    items = parser_list_single(first["node"])
                     brace_pos = first["pos"]
                     while brace_pos < token_count(tokens) and token_kind_at(tokens, brace_pos) == "COMMA":
                         brace_pos = brace_pos + 1
                         if brace_pos < token_count(tokens) and token_kind_at(tokens, brace_pos) == "RBRACE":
                             break
                         item = parse_expression(tokens, brace_pos)
-                        items = method_append(items, item["node"])
+                        items = parser_list_append(items, item["node"])
                         brace_pos = item["pos"]
                     brace_pos = parser_expect(tokens, brace_pos, "RBRACE")
-                    atom = {"node": ast_collection("set", items), "pos": brace_pos}
+                    atom = {"node": ast_collection("set", parser_list_finish(items)), "pos": brace_pos}
             else:
                 brace_pos = parser_expect(tokens, brace_pos, "RBRACE")
-                atom = {"node": ast_dict(entries), "pos": brace_pos}
+                atom = {"node": ast_dict(parser_list_finish(entries)), "pos": brace_pos}
         elif atom_kind == "LPAREN":
             paren_pos = pos + 1
             if paren_pos < token_count(tokens) and token_kind_at(tokens, paren_pos) == "RPAREN":
@@ -589,16 +607,16 @@ def parse_pratt_expr(tokens, pos, min_bp):
                 first = parse_expression(tokens, paren_pos)
                 paren_pos = first["pos"]
                 if paren_pos < token_count(tokens) and token_kind_at(tokens, paren_pos) == "COMMA":
-                    items = [first["node"]]
+                    items = parser_list_single(first["node"])
                     while paren_pos < token_count(tokens) and token_kind_at(tokens, paren_pos) == "COMMA":
                         paren_pos = paren_pos + 1
                         if paren_pos < token_count(tokens) and token_kind_at(tokens, paren_pos) == "RPAREN":
                             break
                         item = parse_expression(tokens, paren_pos)
-                        items = method_append(items, item["node"])
+                        items = parser_list_append(items, item["node"])
                         paren_pos = item["pos"]
                     paren_pos = parser_expect(tokens, paren_pos, "RPAREN")
-                    atom = {"node": ast_collection("tuple", items), "pos": paren_pos}
+                    atom = {"node": ast_collection("tuple", parser_list_finish(items)), "pos": paren_pos}
                 else:
                     next_pos = parser_expect(tokens, paren_pos, "RPAREN")
                     atom = {"node": first["node"], "pos": next_pos}
@@ -615,7 +633,7 @@ def parse_pratt_expr(tokens, pos, min_bp):
             if postfix_kind == "LPAREN":
                 postfix_handled = True
                 postfix_pos = postfix_pos + 1
-                args = []
+                args = parser_list_create()
                 arg_kind = token_kind_at(tokens, postfix_pos)
                 if arg_kind != "RPAREN":
                     reading = True
@@ -628,11 +646,11 @@ def parse_pratt_expr(tokens, pos, min_bp):
                                 is_kwarg = True
                         if is_kwarg:
                             arg = parse_expression(tokens, postfix_pos + 2)
-                            args = method_append(args, ast_kwarg(token_text_at(tokens, postfix_pos), arg["node"]))
+                            args = parser_list_append(args, ast_kwarg(token_text_at(tokens, postfix_pos), arg["node"]))
                             postfix_pos = arg["pos"]
                         if not is_kwarg:
                             arg = parse_expression(tokens, postfix_pos)
-                            args = method_append(args, arg["node"])
+                            args = parser_list_append(args, arg["node"])
                             postfix_pos = arg["pos"]
                         comma_kind = token_kind_at(tokens, postfix_pos)
                         if comma_kind == "COMMA":
@@ -640,7 +658,7 @@ def parse_pratt_expr(tokens, pos, min_bp):
                         if comma_kind != "COMMA":
                             reading = False
                 postfix_pos = parser_expect(tokens, postfix_pos, "RPAREN")
-                postfix_node = ast_call(postfix_node, args)
+                postfix_node = ast_call(postfix_node, parser_list_finish(args))
             if not postfix_handled:
                 if postfix_kind == "DOT":
                     postfix_handled = True
@@ -651,7 +669,7 @@ def parse_pratt_expr(tokens, pos, min_bp):
                     method_kind = token_kind_at(tokens, postfix_pos)
                     if method_kind == "LPAREN":
                         postfix_pos = postfix_pos + 1
-                        args = []
+                        args = parser_list_create()
                         arg_kind = token_kind_at(tokens, postfix_pos)
                         if arg_kind != "RPAREN":
                             reading = True
@@ -664,11 +682,11 @@ def parse_pratt_expr(tokens, pos, min_bp):
                                         is_kwarg = True
                                 if is_kwarg:
                                     arg = parse_expression(tokens, postfix_pos + 2)
-                                    args = method_append(args, ast_kwarg(token_text_at(tokens, postfix_pos), arg["node"]))
+                                    args = parser_list_append(args, ast_kwarg(token_text_at(tokens, postfix_pos), arg["node"]))
                                     postfix_pos = arg["pos"]
                                 if not is_kwarg:
                                     arg = parse_expression(tokens, postfix_pos)
-                                    args = method_append(args, arg["node"])
+                                    args = parser_list_append(args, arg["node"])
                                     postfix_pos = arg["pos"]
                                 comma_kind = token_kind_at(tokens, postfix_pos)
                                 if comma_kind == "COMMA":
@@ -676,7 +694,7 @@ def parse_pratt_expr(tokens, pos, min_bp):
                                 if comma_kind != "COMMA":
                                     reading = False
                         postfix_pos = parser_expect(tokens, postfix_pos, "RPAREN")
-                        postfix_node = ast_method_call(postfix_node, name, args)
+                        postfix_node = ast_method_call(postfix_node, name, parser_list_finish(args))
                     if method_kind != "LPAREN":
                         postfix_node = ast_attr(postfix_node, name)
             if not postfix_handled:
@@ -752,7 +770,7 @@ def parse_statement(tokens, pos):
         pos = parser_expect(tokens, pos, "KW_DEF")
         name = token_text_at(tokens, pos)
         pos = parser_expect(tokens, pos + 1, "LPAREN")
-        params = []
+        params = parser_list_create()
         current_kind = token_kind_at(tokens, pos)
         if current_kind != "RPAREN":
             reading = True
@@ -768,7 +786,7 @@ def parse_statement(tokens, pos):
                     pos = parsed_default["pos"]
                 if not has_default:
                     default_value = ast_value("none", none)
-                params = method_append(params, ast_parameter(param_name, has_default, default_value))
+                params = parser_list_append(params, ast_parameter(param_name, has_default, default_value))
                 current_kind = token_kind_at(tokens, pos)
                 if current_kind == "COMMA":
                     pos = pos + 1
@@ -776,7 +794,7 @@ def parse_statement(tokens, pos):
                     reading = False
         pos = parser_expect(tokens, pos, "RPAREN")
         pos = parser_expect(tokens, pos, "COLON")
-        fn_block_body = []
+        fn_block_body = parser_list_create()
         if token_kind_at(tokens, pos) == "LBRACE":
             pos = pos + 1
             pos = parser_skip_newlines(tokens, pos)
@@ -789,7 +807,7 @@ def parse_statement(tokens, pos):
                     fn_block_scanning_block = False
                 else:
                     fn_block_stmt = parse_statement(tokens, pos)
-                    fn_block_body = method_append(fn_block_body, fn_block_stmt["node"])
+                    fn_block_body = parser_list_append(fn_block_body, fn_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, fn_block_stmt["pos"])
             pos = parser_expect(tokens, pos, "RBRACE")
         else:
@@ -805,21 +823,21 @@ def parse_statement(tokens, pos):
                     fn_block_scanning_indent_block = False
                 else:
                     fn_block_stmt = parse_statement(tokens, pos)
-                    fn_block_body = method_append(fn_block_body, fn_block_stmt["node"])
+                    fn_block_body = parser_list_append(fn_block_body, fn_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, fn_block_stmt["pos"])
             fn_block_end_kind = token_kind_at(tokens, pos)
             if fn_block_end_kind == "DEDENT":
                 pos = parser_expect(tokens, pos, "DEDENT")
             elif fn_block_end_kind != "EOF":
                 fail("expected DEDENT or EOF")
-        return {"node": ast_function(name, params, fn_block_body), "pos": pos}
+        return {"node": ast_function(name, parser_list_finish(params), parser_list_finish(fn_block_body)), "pos": pos}
     if kind == "KW_CLASS":
         pos = parser_expect(tokens, pos, "KW_CLASS")
         if token_kind_at(tokens, pos) != "IDENTIFIER":
             fail("expected class name")
         name = token_text_at(tokens, pos)
         pos = parser_expect(tokens, pos + 1, "COLON")
-        class_block_body = []
+        class_block_body = parser_list_create()
         if token_kind_at(tokens, pos) == "LBRACE":
             pos = pos + 1
             pos = parser_skip_newlines(tokens, pos)
@@ -832,7 +850,7 @@ def parse_statement(tokens, pos):
                     class_block_scanning_block = False
                 else:
                     class_block_stmt = parse_statement(tokens, pos)
-                    class_block_body = method_append(class_block_body, class_block_stmt["node"])
+                    class_block_body = parser_list_append(class_block_body, class_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, class_block_stmt["pos"])
             pos = parser_expect(tokens, pos, "RBRACE")
         else:
@@ -848,14 +866,14 @@ def parse_statement(tokens, pos):
                     class_block_scanning_indent_block = False
                 else:
                     class_block_stmt = parse_statement(tokens, pos)
-                    class_block_body = method_append(class_block_body, class_block_stmt["node"])
+                    class_block_body = parser_list_append(class_block_body, class_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, class_block_stmt["pos"])
             class_block_end_kind = token_kind_at(tokens, pos)
             if class_block_end_kind == "DEDENT":
                 pos = parser_expect(tokens, pos, "DEDENT")
             elif class_block_end_kind != "EOF":
                 fail("expected DEDENT or EOF")
-        return {"node": ast_class(name, class_block_body), "pos": pos}
+        return {"node": ast_class(name, parser_list_finish(class_block_body)), "pos": pos}
     if kind == "IDENTIFIER":
         # module/export are contextual declaration words. They remain valid
         # identifiers in expressions and assignments used by the compiler
@@ -889,7 +907,7 @@ def parse_statement(tokens, pos):
         pos = parser_expect(tokens, pos, "KW_IF")
         cond = parse_expression(tokens, pos)
         pos = parser_expect(tokens, cond["pos"], "COLON")
-        if_block_body = []
+        if_block_body = parser_list_create()
         if token_kind_at(tokens, pos) == "LBRACE":
             pos = pos + 1
             pos = parser_skip_newlines(tokens, pos)
@@ -902,7 +920,7 @@ def parse_statement(tokens, pos):
                     if_block_scanning_block = False
                 else:
                     if_block_stmt = parse_statement(tokens, pos)
-                    if_block_body = method_append(if_block_body, if_block_stmt["node"])
+                    if_block_body = parser_list_append(if_block_body, if_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, if_block_stmt["pos"])
             pos = parser_expect(tokens, pos, "RBRACE")
         else:
@@ -918,7 +936,7 @@ def parse_statement(tokens, pos):
                     if_block_scanning_indent_block = False
                 else:
                     if_block_stmt = parse_statement(tokens, pos)
-                    if_block_body = method_append(if_block_body, if_block_stmt["node"])
+                    if_block_body = parser_list_append(if_block_body, if_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, if_block_stmt["pos"])
             if_block_end_kind = token_kind_at(tokens, pos)
             if if_block_end_kind == "DEDENT":
@@ -926,13 +944,13 @@ def parse_statement(tokens, pos):
             elif if_block_end_kind != "EOF":
                 fail("expected DEDENT or EOF")
         pos = parser_skip_newlines(tokens, pos)
-        elifs = []
+        elifs = parser_list_create()
         else_body = []
         while pos < token_count(tokens) and token_kind_at(tokens, pos) == "KW_ELIF":
             elif_cond = parse_expression(tokens, pos + 1)
             elif_pos = parser_expect(tokens, elif_cond["pos"], "COLON")
             pos = elif_pos
-            elif_block_body = []
+            elif_block_body = parser_list_create()
             if token_kind_at(tokens, pos) == "LBRACE":
                 pos = pos + 1
                 pos = parser_skip_newlines(tokens, pos)
@@ -945,7 +963,7 @@ def parse_statement(tokens, pos):
                         elif_block_scanning_block = False
                     else:
                         elif_block_stmt = parse_statement(tokens, pos)
-                        elif_block_body = method_append(elif_block_body, elif_block_stmt["node"])
+                        elif_block_body = parser_list_append(elif_block_body, elif_block_stmt["node"])
                         pos = parser_skip_newlines(tokens, elif_block_stmt["pos"])
                 pos = parser_expect(tokens, pos, "RBRACE")
             else:
@@ -961,19 +979,19 @@ def parse_statement(tokens, pos):
                         elif_block_scanning_indent_block = False
                     else:
                         elif_block_stmt = parse_statement(tokens, pos)
-                        elif_block_body = method_append(elif_block_body, elif_block_stmt["node"])
+                        elif_block_body = parser_list_append(elif_block_body, elif_block_stmt["node"])
                         pos = parser_skip_newlines(tokens, elif_block_stmt["pos"])
                 elif_block_end_kind = token_kind_at(tokens, pos)
                 if elif_block_end_kind == "DEDENT":
                     pos = parser_expect(tokens, pos, "DEDENT")
                 elif elif_block_end_kind != "EOF":
                     fail("expected DEDENT or EOF")
-            elifs = method_append(elifs, ast_branch(elif_cond["node"], elif_block_body))
+            elifs = parser_list_append(elifs, ast_branch(elif_cond["node"], parser_list_finish(elif_block_body)))
             pos = parser_skip_newlines(tokens, pos)
         if pos < token_count(tokens) and token_kind_at(tokens, pos) == "KW_ELSE":
             else_pos = parser_expect(tokens, pos + 1, "COLON")
             pos = else_pos
-            else_block_body = []
+            else_block_body = parser_list_create()
             if token_kind_at(tokens, pos) == "LBRACE":
                 pos = pos + 1
                 pos = parser_skip_newlines(tokens, pos)
@@ -986,7 +1004,7 @@ def parse_statement(tokens, pos):
                         else_block_scanning_block = False
                     else:
                         else_block_stmt = parse_statement(tokens, pos)
-                        else_block_body = method_append(else_block_body, else_block_stmt["node"])
+                        else_block_body = parser_list_append(else_block_body, else_block_stmt["node"])
                         pos = parser_skip_newlines(tokens, else_block_stmt["pos"])
                 pos = parser_expect(tokens, pos, "RBRACE")
             else:
@@ -1002,21 +1020,21 @@ def parse_statement(tokens, pos):
                         else_block_scanning_indent_block = False
                     else:
                         else_block_stmt = parse_statement(tokens, pos)
-                        else_block_body = method_append(else_block_body, else_block_stmt["node"])
+                        else_block_body = parser_list_append(else_block_body, else_block_stmt["node"])
                         pos = parser_skip_newlines(tokens, else_block_stmt["pos"])
                 else_block_end_kind = token_kind_at(tokens, pos)
                 if else_block_end_kind == "DEDENT":
                     pos = parser_expect(tokens, pos, "DEDENT")
                 elif else_block_end_kind != "EOF":
                     fail("expected DEDENT or EOF")
-            else_body = else_block_body
+            else_body = parser_list_finish(else_block_body)
             pos = parser_skip_newlines(tokens, pos)
-        return {"node": ast_if(cond["node"], if_block_body, elifs, else_body), "pos": pos}
+        return {"node": ast_if(cond["node"], parser_list_finish(if_block_body), parser_list_finish(elifs), else_body), "pos": pos}
     if kind == "KW_WHILE":
         pos = parser_expect(tokens, pos, "KW_WHILE")
         cond = parse_expression(tokens, pos)
         pos = parser_expect(tokens, cond["pos"], "COLON")
-        while_block_body = []
+        while_block_body = parser_list_create()
         if token_kind_at(tokens, pos) == "LBRACE":
             pos = pos + 1
             pos = parser_skip_newlines(tokens, pos)
@@ -1029,7 +1047,7 @@ def parse_statement(tokens, pos):
                     while_block_scanning_block = False
                 else:
                     while_block_stmt = parse_statement(tokens, pos)
-                    while_block_body = method_append(while_block_body, while_block_stmt["node"])
+                    while_block_body = parser_list_append(while_block_body, while_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, while_block_stmt["pos"])
             pos = parser_expect(tokens, pos, "RBRACE")
         else:
@@ -1045,32 +1063,32 @@ def parse_statement(tokens, pos):
                     while_block_scanning_indent_block = False
                 else:
                     while_block_stmt = parse_statement(tokens, pos)
-                    while_block_body = method_append(while_block_body, while_block_stmt["node"])
+                    while_block_body = parser_list_append(while_block_body, while_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, while_block_stmt["pos"])
             while_block_end_kind = token_kind_at(tokens, pos)
             if while_block_end_kind == "DEDENT":
                 pos = parser_expect(tokens, pos, "DEDENT")
             elif while_block_end_kind != "EOF":
                 fail("expected DEDENT or EOF")
-        return {"node": ast_while(cond["node"], while_block_body), "pos": pos}
+        return {"node": ast_while(cond["node"], parser_list_finish(while_block_body)), "pos": pos}
     if kind == "KW_FOR":
         pos = parser_expect(tokens, pos, "KW_FOR")
-        targets = []
+        targets = parser_list_create()
         while pos < token_count(tokens) and token_kind_at(tokens, pos) != "KW_IN":
             if token_kind_at(tokens, pos) != "IDENTIFIER":
                 fail("expected for target got " + token_kind_at(tokens, pos) + " text=" + token_text_at(tokens, pos))
-            targets = method_append(targets, token_text_at(tokens, pos))
+            targets = parser_list_append(targets, token_text_at(tokens, pos))
             pos = pos + 1
             if token_kind_at(tokens, pos) == "COMMA":
                 pos = pos + 1
             elif token_kind_at(tokens, pos) != "KW_IN":
                 fail("expected comma or in after for target")
-        if len(targets) == 0:
+        if __tyrion_native_ast_builder_len(targets, 0) == 0:
             fail("expected for target after " + token_kind_at(tokens, pos - 1) + " text=" + token_text_at(tokens, pos - 1) + " before " + token_kind_at(tokens, pos) + " text=" + token_text_at(tokens, pos))
         pos = parser_expect(tokens, pos, "KW_IN")
         iterable = parse_expression(tokens, pos)
         pos = parser_expect(tokens, iterable["pos"], "COLON")
-        for_block_body = []
+        for_block_body = parser_list_create()
         if token_kind_at(tokens, pos) == "LBRACE":
             pos = pos + 1
             pos = parser_skip_newlines(tokens, pos)
@@ -1083,7 +1101,7 @@ def parse_statement(tokens, pos):
                     for_block_scanning_block = False
                 else:
                     for_block_stmt = parse_statement(tokens, pos)
-                    for_block_body = method_append(for_block_body, for_block_stmt["node"])
+                    for_block_body = parser_list_append(for_block_body, for_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, for_block_stmt["pos"])
             pos = parser_expect(tokens, pos, "RBRACE")
         else:
@@ -1099,14 +1117,14 @@ def parse_statement(tokens, pos):
                     for_block_scanning_indent_block = False
                 else:
                     for_block_stmt = parse_statement(tokens, pos)
-                    for_block_body = method_append(for_block_body, for_block_stmt["node"])
+                    for_block_body = parser_list_append(for_block_body, for_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, for_block_stmt["pos"])
             for_block_end_kind = token_kind_at(tokens, pos)
             if for_block_end_kind == "DEDENT":
                 pos = parser_expect(tokens, pos, "DEDENT")
             elif for_block_end_kind != "EOF":
                 fail("expected DEDENT or EOF")
-        return {"node": ast_for(targets, iterable["node"], for_block_body), "pos": pos}
+        return {"node": ast_for(parser_list_finish(targets), iterable["node"], parser_list_finish(for_block_body)), "pos": pos}
     if kind == "KW_WITH":
         pos = parser_expect(tokens, pos, "KW_WITH")
         resource = parse_expression(tokens, pos)
@@ -1115,7 +1133,7 @@ def parse_statement(tokens, pos):
             fail("expected with binding name")
         name = token_text_at(tokens, pos)
         pos = parser_expect(tokens, pos + 1, "COLON")
-        with_block_body = []
+        with_block_body = parser_list_create()
         if token_kind_at(tokens, pos) == "LBRACE":
             pos = pos + 1
             pos = parser_skip_newlines(tokens, pos)
@@ -1128,7 +1146,7 @@ def parse_statement(tokens, pos):
                     with_block_scanning_block = False
                 else:
                     with_block_stmt = parse_statement(tokens, pos)
-                    with_block_body = method_append(with_block_body, with_block_stmt["node"])
+                    with_block_body = parser_list_append(with_block_body, with_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, with_block_stmt["pos"])
             pos = parser_expect(tokens, pos, "RBRACE")
         else:
@@ -1144,18 +1162,18 @@ def parse_statement(tokens, pos):
                     with_block_scanning_indent_block = False
                 else:
                     with_block_stmt = parse_statement(tokens, pos)
-                    with_block_body = method_append(with_block_body, with_block_stmt["node"])
+                    with_block_body = parser_list_append(with_block_body, with_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, with_block_stmt["pos"])
             with_block_end_kind = token_kind_at(tokens, pos)
             if with_block_end_kind == "DEDENT":
                 pos = parser_expect(tokens, pos, "DEDENT")
             elif with_block_end_kind != "EOF":
                 fail("expected DEDENT or EOF")
-        return {"node": ast_with(resource["node"], name, with_block_body), "pos": pos}
+        return {"node": ast_with(resource["node"], name, parser_list_finish(with_block_body)), "pos": pos}
     if kind == "KW_TRY":
         pos = parser_expect(tokens, pos, "KW_TRY")
         pos = parser_expect(tokens, pos, "COLON")
-        try_body_block_body = []
+        try_body_block_body = parser_list_create()
         if token_kind_at(tokens, pos) == "LBRACE":
             pos = pos + 1
             pos = parser_skip_newlines(tokens, pos)
@@ -1168,7 +1186,7 @@ def parse_statement(tokens, pos):
                     try_body_block_scanning_block = False
                 else:
                     try_body_block_stmt = parse_statement(tokens, pos)
-                    try_body_block_body = method_append(try_body_block_body, try_body_block_stmt["node"])
+                    try_body_block_body = parser_list_append(try_body_block_body, try_body_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, try_body_block_stmt["pos"])
             pos = parser_expect(tokens, pos, "RBRACE")
         else:
@@ -1184,7 +1202,7 @@ def parse_statement(tokens, pos):
                     try_body_block_scanning_indent_block = False
                 else:
                     try_body_block_stmt = parse_statement(tokens, pos)
-                    try_body_block_body = method_append(try_body_block_body, try_body_block_stmt["node"])
+                    try_body_block_body = parser_list_append(try_body_block_body, try_body_block_stmt["node"])
                     pos = parser_skip_newlines(tokens, try_body_block_stmt["pos"])
             try_body_block_end_kind = token_kind_at(tokens, pos)
             if try_body_block_end_kind == "DEDENT":
@@ -1207,7 +1225,7 @@ def parse_statement(tokens, pos):
                 except_binding = token_text_next(tokens, pos)
                 pos = pos + 2
             pos = parser_expect(tokens, pos, "COLON")
-            except_block_body = []
+            except_block_body = parser_list_create()
             if token_kind_at(tokens, pos) == "LBRACE":
                 pos = pos + 1
                 pos = parser_skip_newlines(tokens, pos)
@@ -1220,7 +1238,7 @@ def parse_statement(tokens, pos):
                         except_block_scanning_block = False
                     else:
                         except_block_stmt = parse_statement(tokens, pos)
-                        except_block_body = method_append(except_block_body, except_block_stmt["node"])
+                        except_block_body = parser_list_append(except_block_body, except_block_stmt["node"])
                         pos = parser_skip_newlines(tokens, except_block_stmt["pos"])
                 pos = parser_expect(tokens, pos, "RBRACE")
             else:
@@ -1236,18 +1254,18 @@ def parse_statement(tokens, pos):
                         except_block_scanning_indent_block = False
                     else:
                         except_block_stmt = parse_statement(tokens, pos)
-                        except_block_body = method_append(except_block_body, except_block_stmt["node"])
+                        except_block_body = parser_list_append(except_block_body, except_block_stmt["node"])
                         pos = parser_skip_newlines(tokens, except_block_stmt["pos"])
                 except_block_end_kind = token_kind_at(tokens, pos)
                 if except_block_end_kind == "DEDENT":
                     pos = parser_expect(tokens, pos, "DEDENT")
                 elif except_block_end_kind != "EOF":
                     fail("expected DEDENT or EOF")
-            except_body = except_block_body
+            except_body = parser_list_finish(except_block_body)
             pos = parser_skip_newlines(tokens, pos)
         if pos < token_count(tokens) and token_kind_at(tokens, pos) == "KW_FINALLY":
             pos = parser_expect(tokens, pos + 1, "COLON")
-            finally_block_body = []
+            finally_block_body = parser_list_create()
             if token_kind_at(tokens, pos) == "LBRACE":
                 pos = pos + 1
                 pos = parser_skip_newlines(tokens, pos)
@@ -1260,7 +1278,7 @@ def parse_statement(tokens, pos):
                         finally_block_scanning_block = False
                     else:
                         finally_block_stmt = parse_statement(tokens, pos)
-                        finally_block_body = method_append(finally_block_body, finally_block_stmt["node"])
+                        finally_block_body = parser_list_append(finally_block_body, finally_block_stmt["node"])
                         pos = parser_skip_newlines(tokens, finally_block_stmt["pos"])
                 pos = parser_expect(tokens, pos, "RBRACE")
             else:
@@ -1276,16 +1294,16 @@ def parse_statement(tokens, pos):
                         finally_block_scanning_indent_block = False
                     else:
                         finally_block_stmt = parse_statement(tokens, pos)
-                        finally_block_body = method_append(finally_block_body, finally_block_stmt["node"])
+                        finally_block_body = parser_list_append(finally_block_body, finally_block_stmt["node"])
                         pos = parser_skip_newlines(tokens, finally_block_stmt["pos"])
                 finally_block_end_kind = token_kind_at(tokens, pos)
                 if finally_block_end_kind == "DEDENT":
                     pos = parser_expect(tokens, pos, "DEDENT")
                 elif finally_block_end_kind != "EOF":
                     fail("expected DEDENT or EOF")
-            finally_body = finally_block_body
+            finally_body = parser_list_finish(finally_block_body)
             pos = parser_skip_newlines(tokens, pos)
-        return {"node": ast_try(try_body_block_body, except_name, except_binding, except_body, finally_body), "pos": pos}
+        return {"node": ast_try(parser_list_finish(try_body_block_body), except_name, except_binding, except_body, finally_body), "pos": pos}
     if kind == "KW_RAISE":
         value = parse_expression(tokens, pos + 1)
         return {"node": ast_raise(value["node"]), "pos": value["pos"]}
@@ -1303,7 +1321,7 @@ def parse_statement(tokens, pos):
     if kind == "KW_BREAK":
         return {"node": ast_node("break"), "pos": pos + 1}
     if kind == "STAR":
-        targets = []
+        targets = parser_list_create()
         scan = pos
         saw_comma = False
         reading_targets = True
@@ -1316,7 +1334,7 @@ def parse_statement(tokens, pos):
             scan_kind = token_kind_at(tokens, scan)
             if scan_kind != "IDENTIFIER":
                 fail("expected unpack assignment target")
-            targets = method_append(targets, ast_unpack_entry(token_text_at(tokens, scan), star))
+            targets = parser_list_append(targets, ast_unpack_entry(token_text_at(tokens, scan), star))
             scan = scan + 1
             scan_kind = token_kind_at(tokens, scan)
             if scan_kind == "COMMA":
@@ -1333,12 +1351,12 @@ def parse_statement(tokens, pos):
         if saw_comma:
             if scan_kind == "EQ":
                 value = parse_expression(tokens, scan + 1)
-                return {"node": ast_assign_target(ast_unpack_target(targets), value["node"]), "pos": value["pos"]}
+                return {"node": ast_assign_target(ast_unpack_target(parser_list_finish(targets)), value["node"]), "pos": value["pos"]}
         fail("expected unpack assignment after starred target")
     if kind == "IDENTIFIER":
         next_kind = token_kind_next(tokens, pos)
         if next_kind == "COMMA":
-            targets = []
+            targets = parser_list_create()
             scan = pos
             saw_comma = False
             reading_targets = True
@@ -1351,7 +1369,7 @@ def parse_statement(tokens, pos):
                 scan_kind = token_kind_at(tokens, scan)
                 if scan_kind != "IDENTIFIER":
                     fail("expected unpack assignment target")
-                targets = method_append(targets, ast_unpack_entry(token_text_at(tokens, scan), star))
+                targets = parser_list_append(targets, ast_unpack_entry(token_text_at(tokens, scan), star))
                 scan = scan + 1
                 scan_kind = token_kind_at(tokens, scan)
                 if scan_kind == "COMMA":
@@ -1368,7 +1386,7 @@ def parse_statement(tokens, pos):
             if saw_comma:
                 if scan_kind == "EQ":
                     value = parse_expression(tokens, scan + 1)
-                    return {"node": ast_assign_target(ast_unpack_target(targets), value["node"]), "pos": value["pos"]}
+                    return {"node": ast_assign_target(ast_unpack_target(parser_list_finish(targets)), value["node"]), "pos": value["pos"]}
         target_node = ast_value("var", token_text_at(tokens, pos))
         target_pos = pos + 1
         target_active = True
@@ -1435,7 +1453,7 @@ def parse_statement(tokens, pos):
     return {"node": expr_node, "pos": expr_pos}
 
 def parse_program_items(tokens):
-    items = []
+    items = parser_list_create()
     pos = 0
     scanning = True
     while scanning:
@@ -1446,9 +1464,9 @@ def parse_program_items(tokens):
         else:
             stmt = parse_statement(tokens, pos)
             stmt_node = stmt["node"]
-            items = method_append(items, stmt_node)
+            items = parser_list_append(items, stmt_node)
             pos = stmt["pos"]
-    return items
+    return parser_list_finish(items)
 
 
 def parse_program(tokens):

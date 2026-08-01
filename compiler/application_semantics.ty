@@ -277,15 +277,15 @@ def application_method_id(name):
 
 
 def application_binary_operator_names():
-    return ["+", "-", "*", "==", "!=", "<", "<=", ">", ">=", "/", "in", "or", "and"]
+    return ["+", "-", "*", "==", "!=", "<", "<=", ">", ">=", "/", "in", "or", "and", "%"]
 
 
 def application_binary_operator_ids():
-    return [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013]
+    return [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014]
 
 
 def application_binary_operator_count():
-    return 13
+    return 14
 
 
 def application_binary_operator_name_at(index):
@@ -315,6 +315,8 @@ def application_binary_operator_name_at(index):
         return "or"
     if index == 12:
         return "and"
+    if index == 13:
+        return "%"
     return ""
 
 
@@ -351,6 +353,8 @@ def application_binary_operator_id(name):
         return 1012
     if name == "and":
         return 1013
+    if name == "%":
+        return 1014
     return 0
 
 
@@ -564,6 +568,8 @@ def application_direct_operator_supported(op):
 
 
 def application_direct_builtin_supported(name):
+    if name == "argv":
+        return True
     implementation = primitive_schema_impl_key(name)
     if implementation == "file_open" or implementation == "len" or implementation == "float" or implementation == "bool":
         return True
@@ -583,11 +589,23 @@ def application_direct_builtin_supported(name):
         return True
     if implementation == "host_load" or implementation == "host_call" or implementation == "host_unload":
         return True
+    if implementation == "run_tool" or implementation == "run_tool_capture":
+        return True
+    if implementation == "read_text_file" or implementation == "read_module_graph" or implementation == "write_text_file":
+        return True
+    if implementation == "writer_open" or implementation == "writer_append" or implementation == "writer_close" or implementation == "writer_bytes":
+        return True
+    if implementation == "writer_set_backend" or implementation == "writer_is_x86":
+        return True
     if implementation == "ast_builder_create" or implementation == "ast_builder_len":
         return True
     if implementation == "ast_builder_append" or implementation == "ast_builder_finish" or implementation == "token_builder_append":
         return True
     if implementation == "ast_builder_get":
+        return True
+    if implementation == "token_builder_count" or implementation == "token_builder_field":
+        return True
+    if implementation == "lex" or implementation == "program_has_function":
         return True
     return False
 
@@ -602,11 +620,154 @@ def application_expr_iterator_kind(expr):
     return "generic"
 
 
+def application_name_char_band(ch):
+    if ch < "0":
+        return 1
+    if ch < "A":
+        return 2
+    if ch < "G":
+        return 3
+    if ch < "M":
+        return 4
+    if ch < "S":
+        return 5
+    if ch < "Y":
+        return 6
+    if ch < "a":
+        return 7
+    if ch < "g":
+        return 8
+    if ch < "m":
+        return 9
+    if ch < "s":
+        return 10
+    if ch < "y":
+        return 11
+    return 12
+
+
+def application_name_hash(name):
+    modulus = 4093
+    length = len(name)
+    value = length % modulus
+    if length > 0:
+        value = (value * 17 + application_name_char_band(name[0])) % modulus
+        value = (value * 17 + application_name_char_band(name[length - 1])) % modulus
+    if length > 2:
+        value = (value * 17 + application_name_char_band(name[1])) % modulus
+        value = (value * 17 + application_name_char_band(name[length - 2])) % modulus
+    return value
+
+
+def application_name_index(names):
+    heads = range(4096)
+    head_idx = 0
+    while head_idx < len(heads):
+        heads[head_idx] = 0
+        head_idx = head_idx + 1
+    entries = __tyrion_native_ast_builder_create()
+    name_idx = 0
+    while name_idx < len(names):
+        name = names[name_idx]
+        bucket = application_name_hash(name)
+        __tyrion_native_ast_builder_append(entries, 0, {"name": name, "next": heads[bucket]})
+        heads[bucket] = __tyrion_native_ast_builder_len(entries, 0)
+        name_idx = name_idx + 1
+    return {"contract": "tyrion-application-name-index-v1", "heads": heads, "entries": entries}
+
+
+def application_name_index_present(index, name):
+    if index["contract"] != "tyrion-application-name-index-v1":
+        fail("application analysis rejected code=name-index-contract")
+    bucket = application_name_hash(name)
+    cursor = index["heads"][bucket]
+    while cursor > 0:
+        entry = __tyrion_native_ast_builder_get(index["entries"], 0, cursor - 1)
+        if entry["name"] == name:
+            return True
+        cursor = entry["next"]
+    return False
+
+
+def application_name_index_add(index, name):
+    if application_name_index_present(index, name):
+        return index
+    bucket = application_name_hash(name)
+    __tyrion_native_ast_builder_append(index["entries"], 0, {"name": name, "next": index["heads"][bucket]})
+    # Lists are copy-on-write values. Reattach the updated head vector to the
+    # index instead of mutating a temporary value returned by field lookup.
+    heads = index["heads"]
+    heads[bucket] = __tyrion_native_ast_builder_len(index["entries"], 0)
+    index["heads"] = heads
+    return index
+
+
 def application_name_present(names, name):
     for candidate in names:
         if candidate == name:
             return True
     return False
+
+
+def application_bound_target_names(target, index):
+    if target["kind"] == "var":
+        return application_name_index_add(index, "@bound:" + target["value"])
+    if target["kind"] == "unpack":
+        for entry in target["targets"]:
+            index = application_name_index_add(index, "@bound:" + entry["name"])
+    return index
+
+
+def application_bound_statement_names(items, index):
+    for stmt in items:
+        kind = stmt["kind"]
+        if kind == "assign":
+            index = application_bound_target_names(stmt["target"], index)
+        elif kind == "for":
+            for name in stmt["targets"]:
+                index = application_name_index_add(index, "@bound:" + name)
+            index = application_bound_statement_names(stmt["body"], index)
+        elif kind == "with":
+            index = application_name_index_add(index, "@bound:" + stmt["name"])
+            index = application_bound_statement_names(stmt["body"], index)
+        elif kind == "try":
+            if stmt["except_binding"] != "":
+                index = application_name_index_add(index, "@bound:" + stmt["except_binding"])
+            index = application_bound_statement_names(stmt["body"], index)
+            index = application_bound_statement_names(stmt["except_body"], index)
+            index = application_bound_statement_names(stmt["finally_body"], index)
+        elif kind == "if":
+            index = application_bound_statement_names(stmt["body"], index)
+            for branch in stmt["elifs"]:
+                index = application_bound_statement_names(branch["body"], index)
+            index = application_bound_statement_names(stmt["else_body"], index)
+        elif kind == "while":
+            index = application_bound_statement_names(stmt["body"], index)
+        elif kind == "function":
+            for param in stmt["params"]:
+                index = application_name_index_add(index, "@bound:" + param["name"])
+            index = application_bound_statement_names(stmt["body"], index)
+        elif kind == "class":
+            for member in stmt["body"]:
+                if member["kind"] == "function":
+                    for param in member["params"]:
+                        index = application_name_index_add(index, "@bound:" + param["name"])
+                    index = application_bound_statement_names(member["body"], index)
+    return index
+
+
+def application_analysis_name_index(program, function_names):
+    index = application_name_index(function_names)
+    index = application_bound_statement_names(program["items"], index)
+    # Compiler descendants carry pre-resolved helper calls whose declarations
+    # are intentionally omitted from the pruned application program. Their
+    # compiler plan owns resolution; ordinary applications still receive the
+    # architecture-neutral unknown-call diagnostic below. Append this marker
+    # last so it is the head of its hash chain: compiler analysis checks it for
+    # every non-primitive call and must remain constant-depth.
+    if application_name_present(function_names, "cli_main"):
+        index = application_name_index_add(index, "@compiler-mode")
+    return index
 
 
 def application_lambda_capture_name(expr, params, function_names):
@@ -615,7 +776,7 @@ def application_lambda_capture_name(expr, params, function_names):
         name = expr["value"]
         if application_name_present(params, name):
             return ""
-        if application_name_present(function_names, name):
+        if application_name_index_present(function_names, name):
             return ""
         if application_direct_builtin_supported(name):
             return ""
@@ -768,9 +929,6 @@ def analyze_application_expr(expr, function_names, path):
         # lifetime across the multi-argument recursive call ABI.
         lambda_body = expr["body"]
         lambda_params = expr["params"]
-        capture_name = application_lambda_capture_name(lambda_body, lambda_params, function_names)
-        if capture_name != "":
-            return application_analysis_fail(operation_id, "unsupported-lambda-capture", kind, path, capture_name)
         body_analysis = analyze_application_expr(lambda_body, function_names, path + ".body")
         analysis = application_analysis_merge(analysis, body_analysis)
         analysis = application_analysis_require_value_kind(analysis, "function")
@@ -801,9 +959,11 @@ def analyze_application_expr(expr, function_names, path):
             analysis = application_analysis_require_call(analysis, "builtin")
         else:
             analysis = application_analysis_require_call(analysis, "user")
-        if builtin and not primitive_schema_accepts_arity(call_name, len(expr["args"])):
+        if builtin and call_name != "argv" and not primitive_schema_accepts_arity(call_name, len(expr["args"])):
             return application_analysis_fail(operation_id, "primitive-arity", kind, path, call_name)
-        if not builtin and not application_name_present(function_names, call_name):
+        if call_name == "argv" and len(expr["args"]) != 0:
+            return application_analysis_fail(operation_id, "primitive-arity", kind, path, call_name)
+        if not builtin and not application_name_index_present(function_names, "@compiler-mode") and not application_name_index_present(function_names, call_name) and not application_name_index_present(function_names, "@bound:" + call_name):
             return application_analysis_fail(operation_id, "unknown-call", kind, path, call_name)
         if primitive_schema_runtime_visible(call_name):
             capability = primitive_schema_capability(call_name)
@@ -840,7 +1000,7 @@ def analyze_application_expr(expr, function_names, path):
         return analysis
     if kind == "method_call":
         method_name = expr["name"]
-        object_method = application_name_present(function_names, "@method:" + method_name)
+        object_method = application_name_index_present(function_names, "@method:" + method_name)
         analysis = application_analysis_require_method(analysis, method_name)
         if object_method:
             analysis = application_analysis_require_call(analysis, "bound_method")
@@ -852,31 +1012,34 @@ def analyze_application_expr(expr, function_names, path):
         arg_idx = 0
         for arg in expr["args"]:
             if arg["kind"] == "kwarg":
-                return application_analysis_fail(operation_id, "unsupported-keyword", "kwarg", path + ".arg" + str(arg_idx), arg["name"])
-            analysis = application_analysis_merge(analysis, analyze_application_expr(arg, function_names, path + ".arg" + str(arg_idx)))
+                if not object_method:
+                    return application_analysis_fail(operation_id, "unsupported-keyword", "kwarg", path + ".arg" + str(arg_idx), arg["name"])
+                analysis = application_analysis_merge(analysis, analyze_application_expr(arg["value"], function_names, path + ".arg" + str(arg_idx)))
+            else:
+                analysis = application_analysis_merge(analysis, analyze_application_expr(arg, function_names, path + ".arg" + str(arg_idx)))
             arg_idx = arg_idx + 1
         argc = len(expr["args"])
-        if method_name == "read" and argc != 0 and argc != 1:
+        if not object_method and method_name == "read" and argc != 0 and argc != 1:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if method_name == "write" and argc != 1:
+        if not object_method and method_name == "write" and argc != 1:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if method_name == "flush" and argc != 0:
+        if not object_method and method_name == "flush" and argc != 0:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if method_name == "seek" and argc != 2:
+        if not object_method and method_name == "seek" and argc != 1 and argc != 2:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if method_name == "close" and argc != 0:
+        if not object_method and method_name == "close" and argc != 0:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if method_name == "append" and argc != 1:
+        if not object_method and method_name == "append" and argc != 1:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if method_name == "remove" and argc != 1:
+        if not object_method and method_name == "remove" and argc != 1:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if method_name == "add" and argc != 1:
+        if not object_method and method_name == "add" and argc != 1:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if (method_name == "keys" or method_name == "items") and argc != 0:
+        if not object_method and (method_name == "keys" or method_name == "items") and argc != 0:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if method_name == "strip" and argc != 0:
+        if not object_method and method_name == "strip" and argc != 0:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
-        if (method_name == "split" or method_name == "startswith" or method_name == "endswith") and argc != 1:
+        if not object_method and (method_name == "split" or method_name == "startswith" or method_name == "endswith") and argc != 1:
             return application_analysis_fail(operation_id, "method-arity", kind, path, method_name)
         if object_method:
             analysis = application_analysis_require_component(analysis, "objects")
@@ -953,15 +1116,6 @@ def analyze_application_statement(stmt, function_names, in_function, in_loop, pa
         # analysis. Passing stmt["value"] directly creates a temporary handle
         # whose release can precede later field reads inside the callee.
         assignment_value = stmt["value"]
-        if target_kind == "var" and assignment_value["kind"] == "lambda":
-            lambda_body = assignment_value["body"]
-            lambda_params = assignment_value["params"]
-            capture_name = application_lambda_capture_name(lambda_body, lambda_params, function_names)
-            if capture_name != "":
-                # The direct application ABI has no closure environment. Name
-                # the binding that cannot be materialized so seed and
-                # descendant renderers expose one stable diagnostic contract.
-                return application_analysis_fail(operation_id, "unsupported-lambda-capture", "lambda", path + ".value", stmt["target"]["value"])
         value_analysis = analyze_application_expr(assignment_value, function_names, path + ".value")
         return application_analysis_merge(analysis, value_analysis)
     if kind == "expr":
@@ -1050,7 +1204,7 @@ def analyze_application_statement(stmt, function_names, in_function, in_loop, pa
 
 
 def analyze_application_program(program, function_names):
-    return analyze_application_statements(program["items"], function_names, False, False, "program")
+    return analyze_application_statements(program["items"], application_analysis_name_index(program, function_names), False, False, "program")
 
 
 def application_analysis_diagnostic(application):

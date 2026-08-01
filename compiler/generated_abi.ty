@@ -542,6 +542,21 @@ def generated_object_size():
     return 32
 
 
+def generated_direct_object_class_id_offset():
+    # Native IR v2 uses the canonical object descriptor footprint without
+    # retaining class-name source text. Bytes 8/16/24 contain the immutable
+    # class ID, fixed attribute-slot count, and contiguous owned field slots.
+    return generated_object_class_name_offset()
+
+
+def generated_direct_object_field_count_offset():
+    return generated_object_class_name_length_offset()
+
+
+def generated_direct_object_fields_offset():
+    return generated_object_fields_offset()
+
+
 def generated_value_tag_alias():
     # Non-owning compiler-internal alias. Byte 0 points at another live value
     # slot; aliases must not escape the frame that owns the referent.
@@ -630,6 +645,50 @@ def generated_value_tag_generator():
     return 21
 
 
+def generated_direct_generator_refcount_offset():
+    return 0
+
+
+def generated_direct_generator_resume_offset():
+    return 8
+
+
+def generated_direct_generator_state_offset():
+    return 16
+
+
+def generated_direct_generator_finished_offset():
+    return 24
+
+
+def generated_direct_generator_saved_count_offset():
+    return 32
+
+
+def generated_direct_generator_saved_slots_offset():
+    return 40
+
+
+def generated_direct_generator_cache_count_offset():
+    return 48
+
+
+def generated_direct_generator_cache_capacity_offset():
+    return 56
+
+
+def generated_direct_generator_cache_slots_offset():
+    return 64
+
+
+def generated_direct_generator_globals_offset():
+    return 72
+
+
+def generated_direct_generator_size():
+    return 80
+
+
 def generated_value_tag_closure():
     # Owned closure descriptor containing a retained AST handle, lambda record
     # index, and retained defining lexical environment.
@@ -654,6 +713,29 @@ def generated_closure_environment_offset():
 
 def generated_closure_size():
     return 32
+
+
+def generated_direct_closure_function_id_offset():
+    # Native IR v2 reuses the canonical closure descriptor footprint without
+    # retaining parser AST state: bytes 8/16/24 hold the direct function ID,
+    # capture count, and contiguous canonical capture-slot array.
+    return generated_closure_ast_offset()
+
+
+def generated_direct_closure_capture_count_offset():
+    return generated_closure_record_offset()
+
+
+def generated_direct_closure_captures_offset():
+    return generated_closure_environment_offset()
+
+
+def generated_direct_closure_globals_offset():
+    return 32
+
+
+def generated_direct_closure_size():
+    return 40
 
 
 def generated_abi_contract_text():

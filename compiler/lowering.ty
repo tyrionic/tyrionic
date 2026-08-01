@@ -1597,6 +1597,12 @@ def lowered_function_can_emit(program, name):
     return False
 
 def lowered_function_should_skip_generic(name):
+    # The legacy AArch64 descendant compiler executes this inventory. Linux
+    # x86-64 descendants use Native IR v2 directly, so retaining and traversing
+    # their compiler builder here both changes AArch64 output and pulls the
+    # complete x86 lowering graph into an unreachable target branch.
+    if name == "build_runtime_native_x86_program" or name == "emit_linux_x86_64_direct_program_asm_into":
+        return True
     if name == "collect_build_native_plan" or name == "collect_lowered_function_table_plan":
         return True
     if name == "collect_cli_spec":

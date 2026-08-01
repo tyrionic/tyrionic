@@ -2902,7 +2902,7 @@ def native_ir_v2_constant(constant_id, kind, value):
 
 
 def native_ir_v2_module(functions, constants, externals, components, production_direct):
-    return {"contract": "tyrion-native-ir-v2", "target_independent_abi_version": 2, "production_direct": production_direct, "functions": functions, "globals": [], "constants": constants, "externals": externals, "components": components, "extensions": [], "ownership_manifest": "direct-scalar"}
+    return {"contract": "tyrion-native-ir-v2", "target_independent_abi_version": 2, "production_direct": production_direct, "functions": functions, "globals": [], "constants": constants, "externals": externals, "components": components, "extensions": [], "ownership_manifest": "direct-scalar", "primitive_implementations": [], "primitive_capabilities": []}
 
 
 def native_ir_v2_cfg_probe_module():
@@ -3034,6 +3034,32 @@ def native_ir_v2_released_slot_probe():
     functions = module["functions"]
     function = functions[0]
     function["frame"] = native_ir_v2_frame(1, 0, 0, 6)
+    function["ownership"] = "owned-frame-cleanup"
+    functions[0] = function
+    module["functions"] = functions
+    components = module["components"]
+    components.append("aggregate-core")
+    module["components"] = components
+    module["ownership_manifest"] = "direct-owned-aggregate"
+    return verify_native_ir(module)
+
+
+def native_ir_v2_noncontiguous_cleanup_range_probe():
+    instructions = []
+    instructions.append(native_ir_v2_instruction(0, "slot_alloc", "slot_ptr", {"args": []}))
+    instructions.append(native_ir_v2_instruction(1, "slot_zero", "slot_ptr", {"args": [0]}))
+    instructions.append(native_ir_v2_instruction(2, "slot_alloc", "slot_ptr", {"args": []}))
+    instructions.append(native_ir_v2_instruction(3, "slot_zero", "slot_ptr", {"args": [2]}))
+    instructions.append(native_ir_v2_instruction(4, "slot_alloc", "slot_ptr", {"args": []}))
+    instructions.append(native_ir_v2_instruction(5, "slot_zero", "slot_ptr", {"args": [4]}))
+    instructions.append(native_ir_v2_instruction(6, "direct_slots_release_contiguous", "i32", {"args": [1, 5]}))
+    instructions.append(native_ir_v2_const_int(7, 0, "i32"))
+    blocks = []
+    blocks.append(native_ir_v2_block(0, instructions, native_ir_v2_return(7)))
+    module = native_ir_v2_probe_module(blocks, 8)
+    functions = module["functions"]
+    function = functions[0]
+    function["frame"] = native_ir_v2_frame(3, 0, 0, 8)
     function["ownership"] = "owned-frame-cleanup"
     functions[0] = function
     module["functions"] = functions

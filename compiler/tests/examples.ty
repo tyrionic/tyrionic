@@ -64,7 +64,7 @@ def test_deterministic_examples():
     cases = cases.append(["examples/direct_native_for_range_if_else_branch.ty", "direct_native_for_range_if_else_branch", ["for-range-if-else-ok"]])
     cases = cases.append(["examples/direct_native_functions_data.ty", "direct_native_functions_data", ["total 10", "first_last 1 4", "mapped 10 12", "builtins 4 4 7 2.5 False"]])
     cases = cases.append(["examples/direct_native_generators.ty", "direct_native_generators", ["gen 3 1 4 7 12", "squares 4 0 9"]])
-    cases = cases.append(["examples/direct_native_int_call_abi_branch.ty", "direct_native_int_call_abi_branch", ["int-call-abi-ok"]])
+    cases = cases.append(["examples/direct_native_int_call_abi_branch.ty", "direct_native_int_call_abi_branch", ["int-call-abi-ok", "4294967324", "-4294967325"]])
     cases = cases.append(["examples/direct_native_int_compare_branch.ty", "direct_native_int_compare_branch", ["int-compare-fail"]])
     cases = cases.append(["examples/direct_native_loop_break_continue_branch.ty", "direct_native_loop_break_continue_branch", ["loop-break-continue-ok"]])
     cases = cases.append(["examples/direct_native_runtime_io.ty", "direct_native_runtime_io", ["io winter is coming 10"]])

@@ -8,13 +8,55 @@ This project follows semantic versioning.
 
 Added:
 
-- Add a verified Linux x86-64 Native IR v2 direct-lowering path for scalar
-  programs while retaining the established Native IR v1 production route.
+- Add verified Linux x86-64 Native IR v2 direct lowering for aggregate
+  ownership, generic iteration, assignment, expressions, functions and
+  closures, classes, exceptions, generators, and compiler primitives.
+- Add deterministic whole-program reachability for functions, callable
+  descriptors, classes, attributes, constants, primitives, and AST-free
+  runtime components.
+
+Changed:
+
+- Route Linux x86-64 applications and compiler descendants through
+  source-specific Native IR v2 without an evaluator fallback or embedded
+  static source token/AST image.
+- Lower, verify, and emit Native IR v2 functions as a bounded stream, retaining
+  only compact declarations, constants, and exact operation/primitive
+  manifests, verify slot initialization with one all-slot CFG dataflow, and
+  resolve scalar definitions, slot roots, callable declarations, and
+  dominator-tree intervals through builder-backed indexes. Compute
+  predecessors, reverse postorder, and immediate dominators once per function,
+  answer dominance queries in constant time, propagate ownership state with a
+  monotone changed-block worklist, and pass precomputed slot layout offsets to
+  x86 instruction selection. Materialize deferred CFG edge patches through a
+  per-block index, collect function and callable-name inventories through
+  append-only builders, assemble module-graph source from append-only
+  fragments using deterministic balanced joins, resolve module duplicate
+  symbols through a deterministic hash with exact-byte collision checks
+  instead of copying the owned symbol inventory per lookup, classify module
+  source lines within the traversal frame, and lower contiguous frame and
+  temporary cleanup to one verified range operation whose runtime loop
+  preserves canonical per-slot ownership behavior.
+- Index application callables with deterministic exact-byte collision checks
+  and propagate non-returning calls through a reverse-dependency worklist
+  instead of repeated whole-program scans.
+- Keep target-specialized compiler-emitter branches mutually exclusive so
+  Linux reachability does not retain the Darwin fallback after selecting the
+  Linux emitter.
 
 Fixed:
 
-- Publish long Darwin text-builder results with the canonical owned heap-string
-  ABI, preserving output-path and `.tyn` metadata writes beyond inline storage.
+- Preserve signed 64-bit integer payloads through Linux x86-64 direct slot
+  extraction, calls, arithmetic, and printing, including constants that require
+  a 64-bit immediate materialization.
+- Keep the example random extension's `rand_u64()` result within the
+  non-negative range representable by Tyrion's signed 64-bit integer ABI.
+- Publish and normalize long Darwin text-builder and compiler-metadata results
+  with the canonical owned heap ABI, preserving inventories, output paths, and
+  `.tyn` writes beyond legacy inline and 64 KiB storage limits.
+- Remove the stale Linux x86-64 virtual-state allocation hook left behind by
+  the native-backend cutover, keeping direct compiler descendants independent
+  of the removed virtual-register runtime.
 
 ## 0.1.3
 

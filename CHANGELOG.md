@@ -4,7 +4,7 @@ All notable changes to `tyrionic` are documented in this file.
 
 This project follows semantic versioning.
 
-## 0.1.4
+## 0.1.5
 
 Added:
 
@@ -51,12 +51,24 @@ Fixed:
   a 64-bit immediate materialization.
 - Keep the example random extension's `rand_u64()` result within the
   non-negative range representable by Tyrion's signed 64-bit integer ABI.
-- Publish and normalize long Darwin text-builder and compiler-metadata results
-  with the canonical owned heap ABI, preserving inventories, output paths, and
-  `.tyn` writes beyond legacy inline and 64 KiB storage limits.
+- Extend Darwin owned heap-string normalization to compiler metadata and
+  inventories, preserving results beyond legacy inline and 64 KiB storage
+  limits.
 - Remove the stale Linux x86-64 virtual-state allocation hook left behind by
   the native-backend cutover, keeping direct compiler descendants independent
   of the removed virtual-register runtime.
+
+## 0.1.4
+
+Added:
+
+- Add a verified Linux x86-64 Native IR v2 direct-lowering path for scalar
+  programs while retaining the established Native IR v1 production route.
+
+Fixed:
+
+- Publish long Darwin text-builder results with the canonical owned heap-string
+  ABI, preserving output-path and `.tyn` metadata writes beyond inline storage.
 
 ## 0.1.3
 

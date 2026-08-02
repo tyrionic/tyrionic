@@ -12786,6 +12786,11 @@ def runtime_native_linux_aarch64_line(line):
         # GNU as defers `ldr xN, =imm` constants to literal pools. Large
         # generated functions need bounded, non-fallthrough pool sites.
         line = line + "\n    .ltorg"
+    elif line.strip().startswith("b L"):
+        # Internal unconditional branches are also non-fallthrough. Flush
+        # pending literals here so a single very large lowered function cannot
+        # exceed GNU as's per-pool capacity before reaching its final `ret`.
+        line = line + "\n    .ltorg"
     return line
 
 

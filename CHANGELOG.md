@@ -38,6 +38,8 @@ Fixed:
 - Keep partially converted AArch64 process argument cleanup separate from the
   captured-output stream handles, and return the canonical internal-failure
   status instead of closing an unrelated descriptor.
+- Insert bounded GNU AArch64 literal pools at safe non-fallthrough internal
+  branches so very large lowered functions remain within assembler reach.
 
 ## 0.1.5
 

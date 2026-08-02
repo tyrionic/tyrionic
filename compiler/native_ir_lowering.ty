@@ -1570,6 +1570,10 @@ def native_direct_expression_temporary_depth(expression):
                 zip_depth = native_direct_temporary_groups_for_arguments(len(expression["args"]) + 3) + 1
                 if zip_depth > depth:
                     depth = zip_depth
+            elif call_name == "enumerate":
+                enumerate_depth = native_direct_temporary_groups_for_arguments(5) + 1
+                if enumerate_depth > depth:
+                    depth = enumerate_depth
             elif call_name == "sorted":
                 if depth < 4:
                     depth = 4
@@ -1937,7 +1941,7 @@ def native_direct_plan(program, application, target):
         __tyrion_native_ast_builder_append(planned_functions, 0, function_plan)
         function_idx = function_idx + 1
     planned_function_lists = __tyrion_native_ast_builder_finish(planned_functions)
-    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "executable_items": executable_items, "executable_source_indices": executable_source_indices, "application": application["application"], "extensions": [], "root_manifest": root_manifest, "locals": locals, "global_names": global_names, "loop_control_slot_count": loop_control_slot_count, "exception_control_slot_count": exception_control_slot_count, "value_temporary_slot_count": value_temporary_slot_count, "aggregate_names": aggregate_names, "string_names": string_names, "aggregate_core": aggregate_core, "functions": planned_function_lists[0], "classes": class_plans, "attribute_names": attribute_names, "max_function_arity": max_function_arity, "declared_function_count": len(all_function_plans)}
+    return {"contract": "tyrion-native-direct-plan-v1", "target": target, "program": program, "executable_items": executable_items, "executable_source_indices": executable_source_indices, "application": application["application"], "extensions": [], "dynamic_extension_mode": "off", "dynamic_extension_root": "", "root_manifest": root_manifest, "locals": locals, "global_names": global_names, "loop_control_slot_count": loop_control_slot_count, "exception_control_slot_count": exception_control_slot_count, "value_temporary_slot_count": value_temporary_slot_count, "aggregate_names": aggregate_names, "string_names": string_names, "aggregate_core": aggregate_core, "functions": planned_function_lists[0], "classes": class_plans, "attribute_names": attribute_names, "max_function_arity": max_function_arity, "declared_function_count": len(all_function_plans)}
 
 
 def native_direct_constant_pool_create():
@@ -4191,6 +4195,78 @@ def native_direct_lower_zip_builtin_into_slot(state, expression, destination_slo
     return native_direct_begin_next_block(state)
 
 
+def native_direct_lower_enumerate_builtin_into_slot(state, expression, destination_slot, path, temporary_depth):
+    base_depth = temporary_depth + 1
+    nested_depth = base_depth + native_direct_temporary_groups_for_arguments(5)
+    iterable_slot = native_direct_value_temporary_offset_slot(state, base_depth, 0, path + ".iterable")
+    index_slot = native_direct_value_temporary_offset_slot(state, base_depth, 1, path + ".index")
+    cursor_slot = native_direct_value_temporary_offset_slot(state, base_depth, 2, path + ".cursor")
+    tuple_slot = native_direct_value_temporary_offset_slot(state, base_depth, 3, path + ".tuple")
+    item_slot = native_direct_value_temporary_offset_slot(state, base_depth, 4, path + ".item")
+
+    iterable = native_direct_call_argument_value(expression["args"][0])
+    state = native_direct_lower_value_into_slot(state, iterable, iterable_slot, path + ".arg[0]", nested_depth)
+    state = native_direct_prepare_iterable(state, iterable_slot, path + ".arg[0].prepare", nested_depth)
+    if len(expression["args"]) == 2:
+        start = native_direct_call_argument_value(expression["args"][1])
+        state = native_direct_lower_value_into_slot(state, start, index_slot, path + ".arg[1]", nested_depth)
+    else:
+        zero_index = native_direct_append_const_int(state, 0, "i32")
+        state = zero_index["state"]
+        index_stored = native_direct_append_instruction(state, "direct_slot_set_int_owned", "slot_ptr", {"args": [index_slot, zero_index["result"]]})
+        state = index_stored["state"]
+
+    created = native_direct_append_instruction(state, "direct_slot_collection_new", "slot_ptr", {"args": [destination_slot], "collection_kind": "list", "capacity": 0})
+    state = created["state"]
+    zero_cursor = native_direct_append_const_int(state, 0, "i32")
+    state = zero_cursor["state"]
+    cursor_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [cursor_slot, zero_cursor["result"]]})
+    state = cursor_stored["state"]
+
+    condition_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_jump(condition_block))
+    state = native_direct_begin_next_block(state)
+    current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [cursor_slot]})
+    state = current["state"]
+    count = native_direct_append_instruction(state, "direct_iterable_count", "i32", {"args": [iterable_slot]})
+    state = count["state"]
+    has_item = native_direct_append_instruction(state, "lt", "i1", {"args": [current["result"], count["result"]]})
+    state = has_item["state"]
+    body_block = state["next_block"]
+    state = native_direct_finish_block(state, native_ir_v2_branch(has_item["result"], body_block, -1))
+
+    state = native_direct_begin_next_block(state)
+    tuple_created = native_direct_append_instruction(state, "direct_slot_collection_new", "slot_ptr", {"args": [tuple_slot], "collection_kind": "tuple", "capacity": 2})
+    state = tuple_created["state"]
+    index_appended = native_direct_append_instruction(state, "direct_collection_append_owned", "i32", {"args": [tuple_slot, index_slot]})
+    state = index_appended["state"]
+    item = native_direct_append_instruction(state, "direct_iterable_item_copy", "i32", {"args": [item_slot, iterable_slot, current["result"]]})
+    state = item["state"]
+    item_appended = native_direct_append_instruction(state, "direct_collection_append_owned", "i32", {"args": [tuple_slot, item_slot]})
+    state = item_appended["state"]
+    tuple_appended = native_direct_append_instruction(state, "direct_collection_append_owned", "i32", {"args": [destination_slot, tuple_slot]})
+    state = tuple_appended["state"]
+
+    cursor_current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [cursor_slot]})
+    state = cursor_current["state"]
+    index_current = native_direct_append_instruction(state, "slot_get_int", "i32", {"args": [index_slot]})
+    state = index_current["state"]
+    one = native_direct_append_const_int(state, 1, "i32")
+    state = one["state"]
+    cursor_next = native_direct_append_instruction(state, "add", "i32", {"args": [cursor_current["result"], one["result"]]})
+    state = cursor_next["state"]
+    index_next = native_direct_append_instruction(state, "add", "i32", {"args": [index_current["result"], one["result"]]})
+    state = index_next["state"]
+    cursor_next_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [cursor_slot, cursor_next["result"]]})
+    state = cursor_next_stored["state"]
+    index_next_stored = native_direct_append_instruction(state, "slot_set_int", "slot_ptr", {"args": [index_slot, index_next["result"]]})
+    state = native_direct_finish_block(index_next_stored["state"], native_ir_v2_jump(condition_block))
+
+    exit_block = state["next_block"]
+    state = native_direct_patch_branch_false_target(state, condition_block, exit_block)
+    return native_direct_begin_next_block(state)
+
+
 def native_direct_lower_closure_slot_call_into_slot(state, callee_slot, argument_slot, destination_slot, exception_slot, path):
     cleared = native_direct_append_instruction(state, "direct_slot_set_none_owned", "slot_ptr", {"args": [exception_slot]})
     state = cleared["state"]
@@ -4789,6 +4865,8 @@ def native_direct_lower_value_into_slot(state, expression, destination_slot, pat
         return native_direct_lower_quantifier_builtin_into_slot(state, expression, destination_slot, path, temporary_depth, True)
     if kind == "call" and expression["callee"]["kind"] == "var" and expression["callee"]["value"] == "zip":
         return native_direct_lower_zip_builtin_into_slot(state, expression, destination_slot, path, temporary_depth)
+    if kind == "call" and expression["callee"]["kind"] == "var" and expression["callee"]["value"] == "enumerate":
+        return native_direct_lower_enumerate_builtin_into_slot(state, expression, destination_slot, path, temporary_depth)
     if kind == "call" and expression["callee"]["kind"] == "var" and expression["callee"]["value"] == "sorted":
         return native_direct_lower_sorted_builtin_into_slot(state, expression, destination_slot, path, temporary_depth)
     if kind == "call" and expression["callee"]["kind"] == "var" and primitive_schema_has("" + expression["callee"]["value"]) and not primitive_schema_direct_source_body("" + expression["callee"]["value"]) and expression["callee"]["value"] != "open" and expression["callee"]["value"] != "len":
@@ -5570,6 +5648,8 @@ def native_direct_module_from_parts(plan, functions, constants, primitive_manife
     module["primitive_implementations"] = primitive_manifest["implementations"]
     module["primitive_capabilities"] = primitive_manifest["capabilities"]
     module["extensions"] = plan["extensions"]
+    module["dynamic_extension_mode"] = plan["dynamic_extension_mode"]
+    module["dynamic_extension_root"] = plan["dynamic_extension_root"]
     return module
 
 

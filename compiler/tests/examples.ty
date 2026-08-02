@@ -67,6 +67,7 @@ def test_deterministic_examples():
     cases = cases.append(["examples/direct_native_int_call_abi_branch.ty", "direct_native_int_call_abi_branch", ["int-call-abi-ok", "4294967324", "-4294967325"]])
     cases = cases.append(["examples/direct_native_int_compare_branch.ty", "direct_native_int_compare_branch", ["int-compare-fail"]])
     cases = cases.append(["examples/direct_native_loop_break_continue_branch.ty", "direct_native_loop_break_continue_branch", ["loop-break-continue-ok"]])
+    cases = cases.append(["examples/direct_native_process.ty", "direct_native_process", ["process-conformance-ok"]])
     cases = cases.append(["examples/direct_native_runtime_io.ty", "direct_native_runtime_io", ["io winter is coming 10"]])
     cases = cases.append(["examples/direct_native_scalar_expressions.ty", "direct_native_scalar_expressions", ["12\n2\n35\n7", "4\n7\n8\n3", "True\nTrue\nTrue\nTrue"]])
     cases = cases.append(["examples/full_feature_test.ty", "full_feature_test", ["== primitives ==", "file read hello file", "add result 12", "caught neg", "finally ran", "big 1000000 acc 3"]])
@@ -104,6 +105,13 @@ def test_foo_extension():
     require_built("examples/extensions/foo.ty", binary)
     output = run_example(binary)
     require(output == "hello-static\npong\n", binary + " output mismatch:\n" + output)
+
+
+def test_static_extension_lifecycle():
+    binary = "build/examples/static_lifecycle"
+    require_built("examples/extensions/static_lifecycle.ty", binary)
+    output = run_example(binary)
+    require(output == "static-extension-conformance-ok\n", binary + " output mismatch:\n" + output)
 
 
 def test_foobar_extension():
@@ -162,6 +170,7 @@ def main(platform):
     test_socket_example()
     test_terminal_example(platform)
     test_foo_extension()
+    test_static_extension_lifecycle()
     test_foobar_extension()
     test_rand_extension()
     test_extension_modules()

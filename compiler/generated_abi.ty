@@ -609,8 +609,10 @@ def generated_value_tag_ast_builder():
 
 
 def generated_value_tag_extension_handle():
-    # Static extension table index in bytes 0..7. The handle owns no dynamic
-    # resource; copy is scalar and unload is an idempotent semantic operation.
+    # Pointer in bytes 0..7 to a refcounted 48-byte extension record:
+    # refcount, backend kind, registry index/library handle, call pointer,
+    # loaded state, and optional close pointer. Copies retain the record;
+    # aliases therefore observe shared unload state.
     return 15
 
 

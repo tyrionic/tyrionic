@@ -2184,10 +2184,13 @@ def plan_runtime(analysis):
     return {"contract": "tyrion-runtime-plan-v1", "target": target, "program": analysis["program"], "runtime": plan}
 
 def plan_runtime_with_extensions(analysis, extensions):
+    return plan_runtime_with_extension_config(analysis, extensions, "off", "")
+
+def plan_runtime_with_extension_config(analysis, extensions, dynamic_extension_mode, dynamic_extension_root):
     if analysis["contract"] != "tyrion-analysis-v1":
         fail("invalid analysis boundary record")
     target = backend_require_implemented(analysis["target"])
-    plan = collect_runtime_native_program_plan_with_extensions(analysis["program"], target, extensions)
+    plan = collect_runtime_native_program_plan_with_extension_config(analysis["program"], target, extensions, dynamic_extension_mode, dynamic_extension_root)
     return {"contract": "tyrion-runtime-plan-v1", "target": target, "program": analysis["program"], "runtime": plan}
 
 def lower_program(runtime_plan):

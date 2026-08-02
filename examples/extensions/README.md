@@ -1,4 +1,4 @@
-# Static Extensions
+# Host Extensions
 
 Tyrionic can compile C extensions directly into a native application. The
 compiler reads each extension manifest, compiles its C sources for the host,
@@ -101,6 +101,10 @@ hello-static
 pong
 ```
 
+`static_lifecycle.ty` additionally verifies that aliases share unload state,
+independent loads remain independent, unknown operations return `none`, and
+repeated unload is idempotent.
+
 ## Foobar
 
 `foobar.ty` imports `foobar_wrapper.ty`. Its C extension randomly changes the
@@ -146,9 +150,54 @@ runtime.
   static extension and fails closed otherwise.
 - `--ext-static=auto` links referenced extensions when available.
 - `--ext-static=off` rejects static extension calls.
+- `--ext-dynamic=off` is the default and disables runtime loading.
+- `--ext-dynamic=allowed` permits static-first fallback loading beneath
+  `--ext-dir`.
 
 Use an explicit `--ext-dir` when the extension root is not the compiler's
 default extension directory.
+
+## Dynamic Extensions
+
+A dynamic library exports the same dispatch function plus this manifest:
+
+```c
+struct tyrion_host_extension_manifest_v1 {
+  uint64_t size;
+  uint64_t abi_major;
+  const char *name;
+  const char *call_symbol;
+};
+
+const struct tyrion_host_extension_manifest_v1 *
+tyrion_host_extension_manifest_v1(void);
+```
+
+The loader requires a structure of at least 32 bytes, ABI major `1`, an exact
+name match, and a non-empty call symbol that resolves in the same library.
+Dynamic names are identifiers, never paths. Libraries use this constrained
+layout, and dynamic mode requires an absolute `--ext-dir`:
+
+```text
+<ext-dir>/<name>/libtyrion_ext.dylib   # macOS
+<ext-dir>/<name>/libtyrion_ext.so      # Linux
+```
+
+For example, on macOS:
+
+```sh
+mkdir -p build/dynamic-extensions/foo
+cc -dynamiclib -DTYRION_DYNAMIC_EXTENSION \
+  examples/extensions/foo/src/foo.c \
+  -o build/dynamic-extensions/foo/libtyrion_ext.dylib
+./build/tyrionic \
+  --build compiler/tests/fixtures/dynamic_extension_lifecycle.ty \
+  --out build/dynamic_lifecycle \
+  --ext-static=off \
+  --ext-dynamic=allowed \
+  --ext-dir "$PWD/build/dynamic-extensions"
+./build/dynamic_lifecycle
+```
 
 ## Verify Static Linking
 

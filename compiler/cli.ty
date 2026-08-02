@@ -6,7 +6,7 @@
 # compiler / cli: responsibility-owned canonical compiler module.
 
 def compiler_usage_text():
-    return "Usage:\n  tyrionic --help\n  tyrionic --version\n  tyrionic --scan <input.ty>\n  tyrionic --tokens <input.ty>\n  tyrionic --token-summary <input.ty>\n  tyrionic --parse-summary <input.ty>\n  tyrionic --build <input.ty> --out <output>\n  tyrionic --build <input.ty> --out <output> --ext-static=<off|auto|required>\n  tyrionic --build <input.ty> --out <output> --ext-dir <path>"
+    return "Usage:\n  tyrionic --help\n  tyrionic --version\n  tyrionic --scan <input.ty>\n  tyrionic --tokens <input.ty>\n  tyrionic --token-summary <input.ty>\n  tyrionic --parse-summary <input.ty>\n  tyrionic --build <input.ty> --out <output>\n  tyrionic --build <input.ty> --out <output> --ext-static=<off|auto|required>\n  tyrionic --build <input.ty> --out <output> --ext-dynamic=<off|allowed> --ext-dir <path>"
 
 def compiler_version_text():
     return "tyrionic compiler v0"
@@ -21,7 +21,7 @@ def usage():
     print("  tyrionic --parse-summary <input.ty>")
     print("  tyrionic --build <input.ty> --out <output>")
     print("  tyrionic --build <input.ty> --out <output> --ext-static=<off|auto|required>")
-    print("  tyrionic --build <input.ty> --out <output> --ext-dir <path>")
+    print("  tyrionic --build <input.ty> --out <output> --ext-dynamic=<off|allowed> --ext-dir <path>")
 
 def version():
     print("tyrionic compiler v0")
@@ -169,23 +169,25 @@ def build_compiler_cli_native(program, input_path, output_path):
         fail("native-link rejected code=link-failed;path=" + asm_path + ";output=" + output_path)
     return True
 
-def build_runtime_native_x86_program(program, output_path, extension_mode, extension_root):
+def build_runtime_native_x86_program(program, output_path, extension_mode, extension_root, dynamic_extension_mode):
     artifact_path = output_path + ".tyn"
     asm_path = make_asm_path(output_path)
-    extensions = static_extension_build_plan(program, extension_mode, extension_root)
+    extensions = static_extension_build_plan_configured(program, extension_mode, extension_root, dynamic_extension_mode)
     asm_writer = asm_writer_open(asm_path)
-    asm_writer = emit_linux_x86_64_direct_program_asm_into(asm_writer, program, extensions)
+    asm_writer = emit_linux_x86_64_direct_program_with_extension_config_asm_into(asm_writer, program, extensions, dynamic_extension_mode, extension_root)
     asm_writer_close(asm_writer)
     artifact = "tyrion-runtime-native v1\nnative-build-target-kind=application\nnative-ir-contract=tyrion-native-ir-v2\nnative-lowering-plan=tyrion-native-direct-plan-v1\nnative-exec-mode=native-ir-v2-direct\n"
     if len(extensions) > 0:
         artifact = artifact + "native-static-extension-count=" + str(len(extensions)) + "\n"
+    if dynamic_extension_mode == "allowed":
+        artifact = artifact + "native-dynamic-extension-mode=allowed\n"
     write_text_file(artifact_path, artifact)
-    link_plan = {"extensions": extensions, "extension_count": len(extensions)}
+    link_plan = {"extensions": extensions, "extension_count": len(extensions), "dynamic_extension_mode": dynamic_extension_mode, "dynamic_extension_root": extension_root}
     if not link_runtime_native_direct_program(host_target(), asm_path, output_path, link_plan):
         fail("native-link rejected code=link-failed;path=" + asm_path + ";output=" + output_path)
     return True
 
-def build_runtime_native_program_if_needed(raw_source, program, input_path, output_path, extension_mode, extension_root):
+def build_runtime_native_program_if_needed(raw_source, program, input_path, output_path, extension_mode, extension_root, dynamic_extension_mode):
     target = host_target()
     # The architecture-neutral analysis contract owns source rejection.
     # Backend emitters only receive accepted programs and therefore cannot
@@ -195,20 +197,26 @@ def build_runtime_native_program_if_needed(raw_source, program, input_path, outp
         # Applications and compiler descendants share the same verified native
         # IR path. Never route x86 applications through the historical
         # AArch64-shaped runtime translator.
-        return build_runtime_native_x86_program(program, output_path, extension_mode, extension_root)
+        return build_runtime_native_x86_program(program, output_path, extension_mode, extension_root, dynamic_extension_mode)
     else:
-        return build_runtime_native_direct_program_if_supported_configured(raw_source, input_path, output_path, extension_mode, extension_root)
+        return build_runtime_native_direct_program_if_supported_with_extension_config(raw_source, input_path, output_path, extension_mode, extension_root, dynamic_extension_mode)
 
-def build_native_configured(input_path, output_path, extension_mode, extension_root):
+def build_native_with_extension_config(input_path, output_path, extension_mode, extension_root, dynamic_extension_mode):
+    if dynamic_extension_mode == "allowed":
+        if extension_root == "" or extension_root[0] != "/":
+            fail("--ext-dynamic=allowed requires an absolute --ext-dir")
     raw_source = read_module_graph(input_path)
     program = parse_program(lex(raw_source))
     if program_has_function(program, "cli_main"):
         if build_compiler_cli_native(program, input_path, output_path):
             return
         fail("unsupported compiler invocation or compiler-source build failed")
-    if build_runtime_native_program_if_needed(raw_source, program, input_path, output_path, extension_mode, extension_root):
+    if build_runtime_native_program_if_needed(raw_source, program, input_path, output_path, extension_mode, extension_root, dynamic_extension_mode):
         return
     fail("direct native lowering does not support this program")
+
+def build_native_configured(input_path, output_path, extension_mode, extension_root):
+    return build_native_with_extension_config(input_path, output_path, extension_mode, extension_root, "off")
 
 def build_native(input_path, output_path):
     return build_native_configured(input_path, output_path, "auto", "./extensions")
@@ -216,6 +224,7 @@ def build_native(input_path, output_path):
 def build_native_with_options(args):
     extension_mode = "auto"
     extension_root = "./extensions"
+    dynamic_extension_mode = "off"
     idx = 4
     while idx < len(args):
         arg = args[idx]
@@ -228,6 +237,12 @@ def build_native_with_options(args):
         elif arg == "--ext-static=required":
             extension_mode = "required"
             idx = idx + 1
+        elif arg == "--ext-dynamic=off":
+            dynamic_extension_mode = "off"
+            idx = idx + 1
+        elif arg == "--ext-dynamic=allowed":
+            dynamic_extension_mode = "allowed"
+            idx = idx + 1
         elif arg == "--ext-dir":
             if idx + 1 >= len(args):
                 fail("missing path after --ext-dir")
@@ -235,7 +250,7 @@ def build_native_with_options(args):
             idx = idx + 2
         else:
             fail("unknown or invalid compiler arguments")
-    return build_native_configured(args[1], args[3], extension_mode, extension_root)
+    return build_native_with_extension_config(args[1], args[3], extension_mode, extension_root, dynamic_extension_mode)
 
 def cli_main(args):
     if len(args) == 0:
@@ -269,6 +284,9 @@ def cli_main(args):
         build_native_with_options(args)
         return
     if len(args) == 7 and args[0] == "--build" and args[2] == "--out":
+        build_native_with_options(args)
+        return
+    if len(args) == 8 and args[0] == "--build" and args[2] == "--out":
         build_native_with_options(args)
         return
     fail("unknown or invalid compiler arguments")

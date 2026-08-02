@@ -214,7 +214,7 @@ def backend_dependency_inventory_for(os_name, arch):
 def backend_primitive_implementation_keys(target):
     backend_require_implemented(target)
     common = "len,int,str,range,file_open,wall_time,tcp_connect,tcp_write,tcp_read,tcp_close,"
-    common = common + "read_text_file,read_module_graph,write_text_file,run_tool,writer_open,writer_append,"
+    common = common + "read_text_file,read_module_graph,write_text_file,run_tool,run_tool_capture,writer_open,writer_append,"
     common = common + "writer_close,writer_bytes,writer_set_backend,writer_is_x86,"
     common = common + "ast_builder_create,ast_builder_len,ast_builder_append,ast_builder_finish,ast_builder_get,token_builder_count,token_builder_append,token_builder_field,lex,program_has_function,"
     common = common + "bool,enumerate,zip,sum,min,max,any,all,sorted,"
@@ -226,6 +226,9 @@ def backend_primitive_implementation_keys(target):
     if target["backend"] == "linux-x86_64":
         return common + ",terminal_read_key,ansi_escape"
     return ""
+
+def backend_primitive_implementation_keys_for(os_name, arch):
+    return backend_primitive_implementation_keys(target_spec(os_name, arch))
 
 def backend_has_primitive_implementation(target, implementation):
     entries = split_inventory_text(backend_primitive_implementation_keys(target), ",")

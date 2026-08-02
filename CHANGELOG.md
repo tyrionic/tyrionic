@@ -4,6 +4,41 @@ All notable changes to `tyrionic` are documented in this file.
 
 This project follows semantic versioning.
 
+## 0.1.6
+
+Added:
+
+- Add native AArch64 process parity for `run_tool()` and
+  `__tyrion_run_tool()`, including argument conversion, captured stdout and
+  stderr, normalized exit and signal status, and deterministic cleanup on
+  Darwin and Linux.
+- Add AArch64 static-extension parity with registry lookup, operation dispatch,
+  owned results, shared handle state, and idempotent unload behavior.
+- Add explicit hybrid dynamic-extension loading through
+  `--ext-dynamic=allowed`, constrained absolute extension roots, static-first
+  lookup, manifest/name/ABI/symbol validation, and `dlopen` lifecycle support
+  on all three released targets.
+- Add cross-generation backend primitive-inventory conformance coverage for
+  runtime, process, TCP, terminal, compiler, and extension capabilities.
+- Add Linux x86-64 Native IR v2 direct lowering for `enumerate()` with owned
+  tuple elements and optional start values.
+
+Changed:
+
+- Represent static and dynamic extension handles as refcounted owned records so
+  aliases observe the same unloaded state and the final release closes dynamic
+  libraries exactly once.
+- Advertise captured process execution only on backends that emit and execute
+  its complete primitive contract.
+
+Fixed:
+
+- Initialize and release generated compiler temporary value slots on every
+  early parser and runtime-program build path.
+- Keep partially converted AArch64 process argument cleanup separate from the
+  captured-output stream handles, and return the canonical internal-failure
+  status instead of closing an unrelated descriptor.
+
 ## 0.1.5
 
 Added:

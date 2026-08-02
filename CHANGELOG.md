@@ -30,6 +30,8 @@ Changed:
   libraries exactly once.
 - Advertise captured process execution only on backends that emit and execute
   its complete primitive contract.
+- Allow enough release-build time for the longer Linux x86-64 self-hosted
+  compiler generations to complete.
 
 Fixed:
 
